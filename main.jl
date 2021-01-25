@@ -13,21 +13,16 @@ trainSamples = 6000
 testSamples = 1000
 dataset = "MNIST"
 xTrain, yTrain, xTest, yTest = loadData(dataset, trainSamples, testSamples)
-nEpochs = 3
-batchsize = 32
+
+nEpochs = 10
+batchsize = 30
 testBatchsize = min(10000, testSamples)
 numIter = 15
 outpath = "networks"
-random_feedback = false
+random_feedback = true
 
 for epoch=1:nEpochs
     println("\nEpoch: $epoch")
     @time trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsize, 1, numIter, ReLU, random_feedback, outpath)
 end
-
-# @time acc_train = predict(Net, xTrain, yTrain, batchsize, numIter, ReLU)
-# println(acc_train)
-
-# @time acc_test = predict(Net, xTest, yTest, batchsize, numIter, ReLU)
-# println(acc_test)
 
