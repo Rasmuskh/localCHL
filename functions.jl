@@ -49,10 +49,11 @@ function ReLU(PreActivation)
     return max.(0, PreActivation)
 end
 
-function energy(z, w1x_plus_b1, Net)
-    E = 0.5 * (z[1] - 2*w1x_plus_b1)'*z[1]
+function energy(z, x, w1x_plus_b1, normW2, Net)
+    E = 0.5 * (z[1] - 2*w1x_plus_b1)'*z[1] + normW2[1] * (x'*x) + Net.b[1]'*Net.b[1]
     for i = 2:Net.nLayers-1
         E += 0.5*Net.γ^(i-1)*z[i]'*(z[i] -2*(Net.w[i]*z[i-1]+Net.b[i]))
+        E +=  0.5*Net.γ^(i-1) * normW2[i] * (z[i-1]'*z[i-1]) + Net.b[i]'*Net.b[i]
     end
     return E
 end
@@ -70,11 +71,12 @@ function forward(z, Net, activation, w1x_plus_b1)
 end
 
 
-function get_z(w1x_plus_b1, wT, z, Net, activation, nIter, clamped)
+function get_z(w1x_plus_b1, normW2, wT, z, Net, activation, nIter, clamped)
         for u=1:nIter
-            z[1] = activation(w1x_plus_b1 + Net.γ*wT[2]*z[2])
+            z[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z[2])/(1 + Net.γ*normW2[2]))
             @inbounds for i=2:Net.nLayers-2
-                z[i] = activation(Net.w[i]*z[i-1] + Net.b[i] + Net.γ*wT[i+1]*z[i+1])
+                z[i] = activation((Net.w[i]*z[i-1] + Net.b[i] + Net.γ*wT[i+1]*z[i+1])
+                                  /(1 + Net.γ*normW2[i+1]))
             end
             if clamped==false
                 L = Net.nLayers - 1
@@ -93,12 +95,17 @@ function get_∇w(∇w, ∇b, x, z_clamped, z_free)
 
     #subsequent layers
     for i=2:Net.nLayers-1
-		    # ∇b[i] = γ^(i-1)*(z_free[i] - z_clamped[i])
-		    # ∇w[i] = γ^(i-1)*(z_free[i]*z_free[i-1]' - z_clamped[i]*z_clamped[i-1]')
+		    ∇b[i] = Net.γ^(i-1)*(z_free[i] - z_clamped[i])
+		    ∇w[i] = Net.γ^(i-1) * ((z_free[i]*z_free[i-1]' - z_clamped[i]*z_clamped[i-1]')
+                               + Net.w[i]*(z_clamped[i-1]'*z_clamped[i-1] - z_free[i-1]'*z_free[i-1]))
 
 		    # Cheaper approximation
-		    ∇b[i] = γ^(i-1)*(z_free[i] - z_clamped[i])
-		    ∇w[i] = ∇b[i]*z_clamped[i-1]'
+		    # ∇b[i] = γ^(i-1)*(z_free[i] - z_clamped[i])
+		    # ∇w[i] = (∇b[i]*z_clamped[i-1]')
+        #+ Net.γ^(i-1)*Net.w[i]*(z_clamped[i-1]'*(z_clamped[i-1] - z_free[i-1])))
+
+        # Closed form solution
+        # ∇w[i] = (z_free[i]*z_free[i-1]' - z_clamped[i]*z_clamped[i-1]')/(z_clamped[i-1]'*z_clamped[i-1] - z_free[i-1]'*z_free[i-1])
     end
 
     return ∇w, ∇b
@@ -123,6 +130,7 @@ function predict(Net, wT, x, y, batchsize, numIter, activation)
 	  # And a variable for counting batch number
 	  batchIndex::Int64 = 0
 	  correct::Int64 = 0
+    normW2 = [norm(w)^2 for w in Net.w]
 
 	  # Loop through mini batches
 	  for i = 1:batchsize:nSamples
@@ -138,7 +146,7 @@ function predict(Net, wT, x, y, batchsize, numIter, activation)
 			      w1x_plus_b1::Array{Float64,1} = Net.w[1]*xBatch[n] + Net.b[1]
 			      # Get activations
             # z[n] = forward(z[n], Net, activation, w1x_plus_b1)
-			      z[n] = get_z(w1x_plus_b1, wT, z[n], Net, activation, numIter, false)
+			      z[n] = get_z(w1x_plus_b1, normW2, wT, z[n], Net, activation, numIter, false)
 		    end
 
 		    # Correct equals true if prediction is correct. Otherwise equals false.
@@ -240,17 +248,20 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
             else
                 fb = [w' for w in Net.w]
             end
+            # precompute
+            normW2 = [norm(w)^2 for w in Net.w]
 
             Threads.@threads for n = 1:batchsize
                 # Precompute  w1x and w1x+b1
 				        w1x_plus_b1::Array{Float64,1} = Net.w[1]*xBatch[n] + Net.b[1]
                 # Get activations
                 # z_clamped_batch[n] = forward(z_clamped_batch[n], Net, activation, w1x_plus_b1)
-							  z_clamped_batch[n][end] = zeros(nNeurons[end]); z_clamped_batch[n][end][yBatch[n]+1] = 1
-                z_clamped_batch[n] = get_z(w1x_plus_b1, fb, z_clamped_batch[n], Net, activation, numIter, true);
+							  z_clamped_batch[n][end] = [yBatch[n]+1==k for k=1:10]
+                #zeros(nNeurons[end]); z_clamped_batch[n][end][yBatch[n]+1] = 1
+                z_clamped_batch[n] = get_z(w1x_plus_b1, normW2, fb, z_clamped_batch[n], Net, activation, numIter, true);
 				        #z_free_batch[n] = deepcopy(z_clamped_batch[n])
                 # z_free_batch[n] = forward(z_free_batch[n], Net, activation, w1x_plus_b1)
-                z_free_batch[n] = get_z(w1x_plus_b1, fb, z_free_batch[n], Net, activation, numIter, false)
+                z_free_batch[n] = get_z(w1x_plus_b1, normW2, fb, z_free_batch[n], Net, activation, numIter, false)
 
 
 
@@ -258,8 +269,8 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
                 ∇w_batch[n], ∇b_batch[n] = get_∇w(∇w_batch[n], ∇b_batch[n], xBatch[n], z_clamped_batch[n], z_free_batch[n])
 
                 # Get energies
-				        E_free_batch[n] = energy(z_free_batch[n], w1x_plus_b1, Net)
-				        E_clamped_batch[n] = energy(z_clamped_batch[n], w1x_plus_b1, Net)
+				        E_free_batch[n] = energy(z_free_batch[n], xBatch[n], w1x_plus_b1, normW2, Net)
+				        E_clamped_batch[n] = energy(z_clamped_batch[n], xBatch[n], w1x_plus_b1, normW2, Net)
 
 			      end
 
@@ -271,9 +282,10 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 			      z_out = [zk[end] for zk in z_free_batch]
 			      correct += sum((argmax.(z_out).-1).==yBatch)
 
-			      Net.w -= η * ∇w
-			      Net.b -= η * ∇b
-			      # update_weights_ADAM(Net, ∇w, ∇b, M_w, M_b, V_w, V_b)
+            # Net.w = ∇w
+			      # Net.w -= η * ∇w
+			      # Net.b -= η * ∇b
+			      update_weights_ADAM(Net, ∇w, ∇b, M_w, M_b, V_w, V_b)
 
 			      print("\r$(@sprintf("%.2f", 100*batchIndex/nBatches))% complete")
 

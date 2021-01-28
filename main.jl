@@ -2,24 +2,24 @@
 include("functions.jl")
 include("LoadData.jl")
 
-γ = 1/8#0.125
-η = 0.4 # 0.0001
-nNeurons = [784, 64, 64, 10]
+γ = 1/8
+η = 0.01# 0.01
+nNeurons = [784, 300, 300, 10]
 Net = init_network(nNeurons, γ, η)
 # Net = load("networks/Network_epoch_100.jld2")["Net"]
 
 # Load dataset
-trainSamples = 6000
-testSamples = 1000
+trainSamples = 60000
+testSamples = 10000
 dataset = "MNIST"
 xTrain, yTrain, xTest, yTest = loadData(dataset, trainSamples, testSamples)
 
-nEpochs = 10
-batchsize = 30
+nEpochs = 100
+batchsize = 32
 testBatchsize = min(10000, testSamples)
-numIter = 15
+numIter = 8
 outpath = "networks"
-random_feedback = true
+random_feedback = false
 
 for epoch=1:nEpochs
     println("\nEpoch: $epoch")
