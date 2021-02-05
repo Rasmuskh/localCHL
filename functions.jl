@@ -6,27 +6,30 @@ using JLD2; # Save and load network dictionaries
 using FileIO; # Save and load network dictionaries
 
 
-mutable struct Net_CHL
+mutable struct Net_CHL{T1, T2, T3, T4, T5}
     nNeurons::Array{Int64, 1}
 	  η::Float64
 	  γ::Float64
 	  nLayers::Int64
 	  w::Array{Array{Float64, 2},1}
 	  g::Array{Array{Float64, 2},1}
-	  u::Array{Array{Float64, 2},1}
 	  b::Array{Array{Float64, 1},1}
+    energy::T1
+    activation::T2
+    get_z::T3
+    get_∇::T4
+    get_fb::T5
 	  num_updates::Int64
 	  History::Dict{String, Array{Float64,1}}
 end
 Random.seed!(471)
 rng = MersenneTwister(135)
 
-function init_network(nNeurons, γ, η)
+function init_network(nNeurons, γ, η, energy, activation, get_z, get_∇, get_fb)
 	  """Initialize network weights and allocate arrays for training metric history."""
 	  nLayers = length(nNeurons)
 	  w = [sqrt(2 / nNeurons[i]) * randn(rng, Float64, (nNeurons[i+1], nNeurons[i])) for i = 1:nLayers-1]
 	  g = [sqrt(2 / nNeurons[i]) * randn(rng, Float64, (nNeurons[i], nNeurons[i+1])) for i = 1:nLayers-1]
-    u = [sqrt(2 / nNeurons[i]) * randn(rng, Float64, (nNeurons[i], nNeurons[end])) for i = 1:nLayers-1]
 	  b = [zeros(Float64, (nNeurons[i+1])) for i = 1:nLayers-1]
 
 	  num_updates = 0
@@ -44,7 +47,7 @@ function init_network(nNeurons, γ, η)
     )
     
 	  # Network struct
-	  Net = Net_CHL(nNeurons, η, γ, nLayers, w, g, u, b, num_updates, History)
+	  Net = Net_CHL(nNeurons, η, γ, nLayers, w, g, b, energy, activation, get_z, get_∇, get_fb, num_updates, History)
 	  println("Network initialized")
 	  return Net
 end
@@ -52,6 +55,11 @@ end
 function ReLU(PreActivation)
     """ReLU function: Clamps input between 0 and infinity"""
     return max.(0, PreActivation)
+end
+
+function Linear(PreActivation)
+    """ReLU function: Clamps input between 0 and infinity"""
+    return PreActivation
 end
 
 function energy(z, x, w1x_plus_b1, normW2, Net)
@@ -75,6 +83,13 @@ function forward(z, Net, activation, w1x_plus_b1)
     return z
 end
 
+function get_fb(Net)
+    return [w' for w in Net.w]
+end
+
+function get_random_fb(Net)
+    return Net.g
+end
 
 function get_z(w1x_plus_b1, normW2, wT, z, Net, activation, nIter, clamped)
         for u=1:nIter
@@ -92,56 +107,40 @@ function get_z(w1x_plus_b1, normW2, wT, z, Net, activation, nIter, clamped)
     return z
 end
 
-function get_z_direct_random_feedback(w1x_plus_b1, normW2, wT, z, Net, activation, nIter, clamped)
-    for u=1:nIter
-        z[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z[end])/(1 + Net.γ*normW2[2]))
-        @inbounds for i=2:Net.nLayers-2
-            z[i] = activation((Net.w[i]*z[i-1] + Net.b[i] + Net.γ*wT[i+1]*z[end])
-                              /(1 + Net.γ*normW2[i+1]))
-        end
-        if clamped==false
-            L = Net.nLayers - 1
-            z[L] = Net.w[L]*z[L-1] + Net.b[L]
-        end
-
-    end
-    return z
-end
-
-function get_z_fast2(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, activation, nIter)
+function get_z_fast2(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, nIter)
     # run inference of clamped activations
     for u=1:nIter
         # Forwards
-        z_clamped[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
+        z_clamped[1] = Net.activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
         @inbounds for i=2:Net.nLayers-2
-            z_clamped[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
+            z_clamped[i] = Net.activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
                                       /(1 + Net.γ*normW2[i+1]))
         end
         # Backwards
         @inbounds for i=Net.nLayers-2:-1:2
-            z_clamped[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
+            z_clamped[i] = Net.activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
                                       /(1 + Net.γ*normW2[i+1]))
         end
-        z_clamped[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
+        z_clamped[1] = Net.activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
     end
     # Get psudo-free output
     L = Net.nLayers - 1
     z_free[L] = Net.w[L]*z_clamped[L-1] + Net.b[L]
     # get k'th pseudo-free activations via k-1 clamped activation and k+1 pseudo-free activation
     @inbounds for i in (Net.nLayers-2):-1:2
-        z_free[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_free[i+1])
+        z_free[i] = Net.activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_free[i+1])
                                /(1 + Net.γ*normW2[i+1]))
     end
-    z_free[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_free[2])/(1 + Net.γ*normW2[2]))
+    z_free[1] = Net.activation((w1x_plus_b1 + Net.γ*wT[2]*z_free[2])/(1 + Net.γ*normW2[2]))
     return z_clamped, z_free
 end
 
-function get_z_fast(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, activation, nIter)
+function get_z_fast(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, nIter)
     # run inference of clamped activations
     for u=1:nIter
-        z_clamped[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
+        z_clamped[1] = Net.activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
         @inbounds for i=2:Net.nLayers-2
-            z_clamped[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
+            z_clamped[i] = Net.activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
                               /(1 + Net.γ*normW2[i+1]))
         end
     end
@@ -150,26 +149,10 @@ function get_z_fast(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, activation,
     z_free[L] = Net.w[L]*z_clamped[L-1] + Net.b[L]
     # get k'th pseudo-free activations via k-1 clamped activation and k+1 pseudo-free activation
     @inbounds for i in (Net.nLayers-2):-1:2
-        z_free[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_free[i+1])
+        z_free[i] = Net.activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_free[i+1])
                                /(1 + Net.γ*normW2[i+1]))
     end
-    z_free[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_free[2])/(1 + Net.γ*normW2[2]))
-    return z_clamped, z_free
-end
-
-function get_z_ultra_fast(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, activation)
-    z_clamped[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[end])/(1 + Net.γ*normW2[2]))
-    @inbounds for i=2:Net.nLayers-2
-        z_clamped[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[end])
-                                  /(1 + Net.γ*normW2[i+1]))
-    end
-    L = Net.nLayers - 1
-    z_free[L] = Net.w[L]*z_clamped[L-1] + Net.b[L]
-    @inbounds for i in (Net.nLayers-2):-1:2
-        z_free[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_free[end])
-                               /(1 + Net.γ*normW2[i+1]))
-    end
-    z_free[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_free[end])/(1 + Net.γ*normW2[2]))
+    z_free[1] = Net.activation((w1x_plus_b1 + Net.γ*wT[2]*z_free[2])/(1 + Net.γ*normW2[2]))
     return z_clamped, z_free
 end
 
@@ -189,59 +172,11 @@ function get_∇w(∇w, ∇b, x, z_clamped, z_free)
 		    # ∇b[i] = γ^(i-1)*(z_free[i] - z_clamped[i])
 		    # ∇w[i] = (∇b[i]*z_clamped[i-1]') + Net.γ^(i-1)*Net.w[i]*(z_clamped[i-1]'*(z_clamped[i-1] - z_free[i-1]))
 
-        # Closed form solution
-        # ∇w[i] = (z_free[i]*z_free[i-1]' - z_clamped[i]*z_clamped[i-1]')/(z_clamped[i-1]'*z_clamped[i-1] - z_free[i-1]'*z_free[i-1])
     end
 
     return ∇w, ∇b
 end
-function predict_direct_random_feedback(Net, fb, x, y, batchsize, numIter, activation)
-	  """Train an MLP. Training is parallel across datapoints."""
 
-	  L = Net.nLayers-1
-	  nNeurons = Net.nNeurons
-
-	  nBatches = trunc(Int64, length(y) / batchsize)
-	  nSamples = length(y) - (length(y)%batchsize)
-	  #Allocate array for activations
-	  z = [[zeros(Float64, N) for N in nNeurons[2:end]] for i=1:batchsize]
-
-	  # And a variable for counting batch number
-	  batchIndex::Int64 = 0
-	  correct::Int64 = 0
-    normW2 = [norm(w)^2 for w in Net.w]
-
-	  # Loop through mini batches
-	  for i = 1:batchsize:nSamples
-		    batchIndex += 1
-		    start = i
-		    stop = start + batchsize - 1
-
-		    xBatch = x[start:stop]
-		    yBatch = y[start:stop]
-
-        Threads.@threads for n = 1:batchsize
-            # Precompute  w1x and w1x+b1
-			      w1x_plus_b1::Array{Float64,1} = Net.w[1]*xBatch[n] + Net.b[1]
-			      # Get activations
-            # z[n] = forward(z[n], Net, activation, w1x_plus_b1)
-
-			      z[n] = get_z_direct_random_feedback(w1x_plus_b1, normW2, fb, z[n], Net, activation, numIter, false)
-            # z[n] = forward(z[n], Net, activation, w1x_plus_b1)
-		    end
-
-		    # Correct equals true if prediction is correct. Otherwise equals false.
-		    z_out = [zk[end] for zk in z]
-		    correct += sum((argmax.(z_out).-1).==yBatch)
-
-	  end
-
-	  Av_accuracy = 100*correct/nSamples
-
-	  println("\nTraining finished\n")
-
-	  return Av_accuracy
-end
 function predict_FF(Net, wT, x, y, batchsize, numIter, activation)
 	  """Train an MLP. Training is parallel across datapoints."""
 
@@ -415,14 +350,7 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 			      xBatch = @view xTrain[start:stop]
 			      yBatch = @view yTrain[start:stop]
 
-            if random_feedback
-                fb = Net.g
-            else
-                fb = [w' for w in Net.w]
-            end
-            if direct_random_feedback
-                fb = Net.u
-            end
+            fb = Net.get_fb(Net)
 
             # precompute
             normW2 = [norm(w)^2 for w in Net.w]
@@ -432,19 +360,14 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 				        w1x_plus_b1::Array{Float64,1} = Net.w[1]*xBatch[n] + Net.b[1]
                 # Get activations
 							  z_clamped_batch[n][end] = [yBatch[n]+1==k for k=1:10]
-                # z_clamped_batch[n] = get_z(w1x_plus_b1, normW2, fb, z_clamped_batch[n], Net, activation, numIter, true);
-                # z_free_batch[n] = get_z(w1x_plus_b1, normW2, fb, z_free_batch[n], Net, activation, numIter, false)
-                # z_clamped_batch[n], z_free_batch[n] = get_z_ultra_fast(w1x_plus_b1, normW2, fb, z_clamped_batch[n], z_free_batch[n], Net, ReLU)
-                z_clamped_batch[n], z_free_batch[n] = get_z_fast2(w1x_plus_b1, normW2, fb, z_clamped_batch[n], z_free_batch[n], Net, ReLU, numIter)
-
-
+                z_clamped_batch[n], z_free_batch[n] = Net.get_z(w1x_plus_b1, normW2, fb,
+                                                                z_clamped_batch[n], z_free_batch[n], Net, numIter)
                 # Get Gradient and update weights
-                ∇w_batch[n], ∇b_batch[n] = get_∇w(∇w_batch[n], ∇b_batch[n], xBatch[n], z_clamped_batch[n], z_free_batch[n])
-
+                ∇w_batch[n], ∇b_batch[n] = Net.get_∇(∇w_batch[n], ∇b_batch[n], xBatch[n],
+                                                     z_clamped_batch[n], z_free_batch[n])
                 # Get energies
-				        E_free_batch[n] = energy(z_free_batch[n], xBatch[n], w1x_plus_b1, normW2, Net)
-				        E_clamped_batch[n] = energy(z_clamped_batch[n], xBatch[n], w1x_plus_b1, normW2, Net)
-
+				        E_free_batch[n] = Net.energy(z_free_batch[n], xBatch[n], w1x_plus_b1, normW2, Net)
+				        E_clamped_batch[n] = Net.energy(z_clamped_batch[n], xBatch[n], w1x_plus_b1, normW2, Net)
 			      end
 
 			      ∇w = mean(∇w_batch)
@@ -471,17 +394,9 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
         av_z1_pos = mean([100*sum(z_free_batch[n][1].>0)/Net.nNeurons[2] for n=1:batchsize])
         sum_z1 = mean([sum(z_free_batch[n][1]) for n=1:batchsize])
 
-        if random_feedback
-            fb = Net.g
-        else
-            fb = [w' for w in Net.w]
-        end
-        if direct_random_feedback
-            fb = Net.u
-        end
+        fb = Net.get_fb(Net)
 
 		    acc_test = predict(Net, fb, xTest, yTest, testBatchsize, numIter, ReLU)
-        # acc_test = predict_direct_random_feedback(Net, fb, xTest, yTest, testBatchsize, numIter, ReLU)
 
 		    push!(Net.History["acc_train"], acc_train)
 		    push!(Net.History["acc_test"], acc_test)
