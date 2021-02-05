@@ -6,8 +6,8 @@ include("LoadData.jl")
 # η = 0.1
 η = 0.001# 0.001
 
-nNeurons = [784, 64, 64, 10]
-Net = init_network(nNeurons, γ, η, energy, ReLU, get_z_fast2, get_∇w, get_fb)
+nNeurons = [784, 300, 300, 10]
+Net = init_network(nNeurons, γ, η, energy, ReLU, get_z_fast!, get_∇w!, get_fb)
 # Net = load("networks/Network_epoch_100.jld2")["Net"]
 
 # Load dataset
@@ -16,7 +16,7 @@ testSamples = 10000
 dataset = "MNIST"
 xTrain, yTrain, xTest, yTest = loadData(dataset, trainSamples, testSamples)
 
-nEpochs = 3
+nEpochs = 100
 batchsize = 32
 testBatchsize = min(10000, testSamples)
 random_feedback = false

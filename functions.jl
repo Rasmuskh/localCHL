@@ -16,8 +16,8 @@ mutable struct Net_CHL{T1, T2, T3, T4, T5}
 	  b::Array{Array{Float64, 1},1}
     energy::T1
     activation::T2
-    get_z::T3
-    get_∇::T4
+    get_z!::T3
+    get_∇!::T4
     get_fb::T5
 	  num_updates::Int64
 	  History::Dict{String, Array{Float64,1}}
@@ -25,7 +25,7 @@ end
 Random.seed!(471)
 rng = MersenneTwister(135)
 
-function init_network(nNeurons, γ, η, energy, activation, get_z, get_∇, get_fb)
+function init_network(nNeurons, γ, η, energy, activation, get_z!, get_∇!, get_fb)
 	  """Initialize network weights and allocate arrays for training metric history."""
 	  nLayers = length(nNeurons)
 	  w = [sqrt(2 / nNeurons[i]) * randn(rng, Float64, (nNeurons[i+1], nNeurons[i])) for i = 1:nLayers-1]
@@ -47,7 +47,7 @@ function init_network(nNeurons, γ, η, energy, activation, get_z, get_∇, get_
     )
     
 	  # Network struct
-	  Net = Net_CHL(nNeurons, η, γ, nLayers, w, g, b, energy, activation, get_z, get_∇, get_fb, num_updates, History)
+	  Net = Net_CHL(nNeurons, η, γ, nLayers, w, g, b, energy, activation, get_z!, get_∇!, get_fb, num_updates, History)
 	  println("Network initialized")
 	  return Net
 end
@@ -84,7 +84,7 @@ function forward(z, Net, activation, w1x_plus_b1)
 end
 
 function get_fb(Net)
-    return [w' for w in Net.w]
+    return Net.w'
 end
 
 function get_random_fb(Net)
@@ -107,7 +107,7 @@ function get_z(w1x_plus_b1, normW2, wT, z, Net, activation, nIter, clamped)
     return z
 end
 
-function get_z_fast2(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, nIter)
+function get_z_fast!(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, nIter)
     # run inference of clamped activations
     for u=1:nIter
         # Forwards
@@ -132,49 +132,32 @@ function get_z_fast2(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, nIter)
                                /(1 + Net.γ*normW2[i+1]))
     end
     z_free[1] = Net.activation((w1x_plus_b1 + Net.γ*wT[2]*z_free[2])/(1 + Net.γ*normW2[2]))
-    return z_clamped, z_free
 end
 
-function get_z_fast(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, nIter)
-    # run inference of clamped activations
-    for u=1:nIter
-        z_clamped[1] = Net.activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
-        @inbounds for i=2:Net.nLayers-2
-            z_clamped[i] = Net.activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
-                              /(1 + Net.γ*normW2[i+1]))
+function meanOfGrad!(∇w, ∇w_batch, batchsize) 
+    ∇w .= ∇w_batch[1]
+    @inbounds for grad in ∇w_batch[2:end]
+        @inbounds for (layer, gradLayer) in enumerate(grad)
+            ∇w[layer] .+= gradLayer
         end
     end
-    # Get psudo-free output
-    L = Net.nLayers - 1
-    z_free[L] = Net.w[L]*z_clamped[L-1] + Net.b[L]
-    # get k'th pseudo-free activations via k-1 clamped activation and k+1 pseudo-free activation
-    @inbounds for i in (Net.nLayers-2):-1:2
-        z_free[i] = Net.activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_free[i+1])
-                               /(1 + Net.γ*normW2[i+1]))
-    end
-    z_free[1] = Net.activation((w1x_plus_b1 + Net.γ*wT[2]*z_free[2])/(1 + Net.γ*normW2[2]))
-    return z_clamped, z_free
+    ∇w ./= batchsize
 end
 
-function get_∇w(∇w, ∇b, x, z_clamped, z_free)
+
+function get_∇w!(∇w, ∇b, x, z_clamped, z_free)
     # First layers weights
     ∇b[1] = z_free[1] - z_clamped[1]
     ∇w[1] = ∇b[1]*x'
- 
-
     #subsequent layers
     for i=2:Net.nLayers-1
-		    ∇b[i] = Net.γ^(i-1)*(z_free[i] - z_clamped[i])
-		    ∇w[i] = Net.γ^(i-1) * ((z_free[i]*z_free[i-1]' - z_clamped[i]*z_clamped[i-1]')
-                              + Net.w[i]*(z_clamped[i-1]'*z_clamped[i-1] - z_free[i-1]'*z_free[i-1]))
-
+		    # ∇b[i] = Net.γ^(i-1)*(z_free[i] - z_clamped[i])
+		    # ∇w[i] = Net.γ^(i-1) * ((z_free[i]*z_free[i-1]' - z_clamped[i]*z_clamped[i-1]')
+        #                      + Net.w[i]*(z_clamped[i-1]'*z_clamped[i-1] - z_free[i-1]'*z_free[i-1]))
 		    # Cheaper approximation
-		    # ∇b[i] = γ^(i-1)*(z_free[i] - z_clamped[i])
-		    # ∇w[i] = (∇b[i]*z_clamped[i-1]') + Net.γ^(i-1)*Net.w[i]*(z_clamped[i-1]'*(z_clamped[i-1] - z_free[i-1]))
-
+		    ∇b[i] = γ^(i-1)*(z_free[i] - z_clamped[i])
+		    ∇w[i] = (∇b[i]*z_clamped[i-1]') + Net.γ^(i-1)*Net.w[i]*(z_clamped[i-1]'*(z_clamped[i-1] - z_free[i-1]))
     end
-
-    return ∇w, ∇b
 end
 
 function predict_FF(Net, wT, x, y, batchsize, numIter, activation)
@@ -316,6 +299,8 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 	  z_clamped_batch = [[zeros(Float64, N) for N in nNeurons[2:end]] for i=1:batchsize]
 	  ∇w_batch = [[zeros(Float64, (nNeurons[n+1], nNeurons[n])) for n = 1:L] for i=1:batchsize]
 	  ∇b_batch = [[zeros(Float64, (nNeurons[n+1])) for n = 1:L] for i=1:batchsize]
+    ∇w = [zeros(Float64, (nNeurons[n+1], nNeurons[n])) for n = 1:L]
+	  ∇b = [zeros(Float64, (nNeurons[n+1])) for n = 1:L]
 
 	  # Arrays for ADAM
     M_w = [zeros(Float64, (Net.nNeurons[i+1], Net.nNeurons[i])) for i = 1:Net.nLayers-1]
@@ -360,18 +345,19 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 				        w1x_plus_b1::Array{Float64,1} = Net.w[1]*xBatch[n] + Net.b[1]
                 # Get activations
 							  z_clamped_batch[n][end] = [yBatch[n]+1==k for k=1:10]
-                z_clamped_batch[n], z_free_batch[n] = Net.get_z(w1x_plus_b1, normW2, fb,
-                                                                z_clamped_batch[n], z_free_batch[n], Net, numIter)
+                # z_clamped_batch[n], z_free_batch[n] =
+                Net.get_z!(w1x_plus_b1, normW2, fb, z_clamped_batch[n], z_free_batch[n], Net, numIter)
                 # Get Gradient and update weights
-                ∇w_batch[n], ∇b_batch[n] = Net.get_∇(∇w_batch[n], ∇b_batch[n], xBatch[n],
+                Net.get_∇!(∇w_batch[n], ∇b_batch[n], xBatch[n],
                                                      z_clamped_batch[n], z_free_batch[n])
                 # Get energies
 				        E_free_batch[n] = Net.energy(z_free_batch[n], xBatch[n], w1x_plus_b1, normW2, Net)
 				        E_clamped_batch[n] = Net.energy(z_clamped_batch[n], xBatch[n], w1x_plus_b1, normW2, Net)
 			      end
 
-			      ∇w = mean(∇w_batch)
-			      ∇b = mean(∇b_batch)
+            meanOfGrad!(∇w, ∇w_batch, batchsize)
+            meanOfGrad!(∇b, ∇b_batch, batchsize)
+
 			      E_free += sum(E_free_batch)
 			      E_clamped += sum(E_clamped_batch)
 			      # Correct equals true if prediction is correct. Otherwise equals false.
@@ -381,7 +367,6 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 			      # Net.w -= η * ∇w
 			      # Net.b -= η * ∇b
 			      update_weights_ADAM(Net, ∇w, ∇b, M_w, M_b, V_w, V_b)
-            #Net.b = [min.(b, 0) for b in Net.b]# Clamp bias from above
 
 			      print("\r$(@sprintf("%.2f", 100*batchIndex/nBatches))% complete")
 
