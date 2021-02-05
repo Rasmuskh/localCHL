@@ -108,6 +108,34 @@ function get_z_direct_random_feedback(w1x_plus_b1, normW2, wT, z, Net, activatio
     return z
 end
 
+function get_z_fast2(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, activation, nIter)
+    # run inference of clamped activations
+    for u=1:nIter
+        # Forwards
+        z_clamped[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
+        @inbounds for i=2:Net.nLayers-2
+            z_clamped[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
+                                      /(1 + Net.γ*normW2[i+1]))
+        end
+        # Backwards
+        @inbounds for i=Net.nLayers-2:-1:2
+            z_clamped[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_clamped[i+1])
+                                      /(1 + Net.γ*normW2[i+1]))
+        end
+        z_clamped[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_clamped[2])/(1 + Net.γ*normW2[2]))
+    end
+    # Get psudo-free output
+    L = Net.nLayers - 1
+    z_free[L] = Net.w[L]*z_clamped[L-1] + Net.b[L]
+    # get k'th pseudo-free activations via k-1 clamped activation and k+1 pseudo-free activation
+    @inbounds for i in (Net.nLayers-2):-1:2
+        z_free[i] = activation((Net.w[i]*z_clamped[i-1] + Net.b[i] + Net.γ*wT[i+1]*z_free[i+1])
+                               /(1 + Net.γ*normW2[i+1]))
+    end
+    z_free[1] = activation((w1x_plus_b1 + Net.γ*wT[2]*z_free[2])/(1 + Net.γ*normW2[2]))
+    return z_clamped, z_free
+end
+
 function get_z_fast(w1x_plus_b1, normW2, wT, z_clamped, z_free, Net, activation, nIter)
     # run inference of clamped activations
     for u=1:nIter
@@ -407,7 +435,7 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
                 # z_clamped_batch[n] = get_z(w1x_plus_b1, normW2, fb, z_clamped_batch[n], Net, activation, numIter, true);
                 # z_free_batch[n] = get_z(w1x_plus_b1, normW2, fb, z_free_batch[n], Net, activation, numIter, false)
                 # z_clamped_batch[n], z_free_batch[n] = get_z_ultra_fast(w1x_plus_b1, normW2, fb, z_clamped_batch[n], z_free_batch[n], Net, ReLU)
-                z_clamped_batch[n], z_free_batch[n] = get_z_fast(w1x_plus_b1, normW2, fb, z_clamped_batch[n], z_free_batch[n], Net, ReLU, numIter)
+                z_clamped_batch[n], z_free_batch[n] = get_z_fast2(w1x_plus_b1, normW2, fb, z_clamped_batch[n], z_free_batch[n], Net, ReLU, numIter)
 
 
                 # Get Gradient and update weights
