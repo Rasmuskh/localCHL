@@ -2,7 +2,7 @@ using BenchmarkTools
 include("functions.jl")
 include("LoadData.jl")
 
-nNeurons = [784, 64, 64, 10]
+nNeurons = [784, 128, 128, 128, 10]
 Net = init_network(nNeurons)
 # Net = load("networks/Network_epoch_100.jld2")["Net"] #Load old network
 
@@ -16,9 +16,9 @@ xTrain, yTrain, xTest, yTest = loadData(dataset, trainSamples, testSamples)
 activation = ReLU
 numIter = 2
 
-nEpochs = 5
-batchsize = 20
-η = 0.01 #/ batchsize
+nEpochs = 100
+batchsize = 64
+η = 0.01
 testBatchsize = min(10000, testSamples)
 outpath = "./networks/$(dataset).jld2"
 for epoch=1:nEpochs

@@ -48,7 +48,7 @@ function Linear(PreActivation)
     return PreActivation
 end
 
-function forward(z, Net, activation, w1x_plus_b1)
+function forward!(z, Net, activation, w1x_plus_b1)
     """Simple feed-forward pass"""
     z[1] = activation(w1x_plus_b1)
     @inbounds for i = 2:Net.nLayers-1
@@ -57,17 +57,7 @@ function forward(z, Net, activation, w1x_plus_b1)
     #The final layer is linear
     L = Net.nLayers
     z[L] = Net.w[L] * z[L-1] + Net.b[L]
-    return z
 end
-
-# function energy(Net, w1x_plus_b1)
-#     E = 0.5*Net.β[1]*norm(w1x_plus_b1 - z[1])^2
-#     for k=2:(Net.nLayers-1)
-#         a = Net.w[k]*z[k-1] + Net.b[k]
-#         E += 0.5*Net.β[k]*norm(a - z[k])^2
-#     end
-#     return E
-# end
 
 function get_loss(Net, w1x_plus_b1, z, activation)
     #TODO: Avoid unnecesary allocations by using inplace operations.
@@ -86,7 +76,6 @@ function run_BCD_LPOM!(x, z, y,
                        W0, W1, b0, b1,
                        a, b, denoms, w1, c,
                        activation)
-
     nPasses = 5
     # TODO: replace these with inplace operations.
     # TODO: Use multiple dispatch to make another version of this function,
@@ -173,7 +162,7 @@ function meanOfGrad!(∇w, ∇w_batch, batchsize)
 end
 
 
-function get_∇(∇w, ∇b, x, w1x_plus_b1, z, activation, Net)
+function get_∇!(∇w, ∇b, x, w1x_plus_b1, z, activation, Net)
     # First layers weights
     ∇b[1] = activation(w1x_plus_b1) - z[1]
     ∇w[1] = ∇b[1]*x'
@@ -182,7 +171,6 @@ function get_∇(∇w, ∇b, x, w1x_plus_b1, z, activation, Net)
         ∇b[i] = activation(Net.w[i]*z[i-1] + Net.b[i]) - z[i]
         ∇w[i] = ∇b[i]*z[i-1]'
     end
-    return (∇w, ∇b)
 end
 
 function predict(Net, x, y, batchsize, activation)
@@ -213,7 +201,7 @@ function predict(Net, x, y, batchsize, activation)
             # Precompute  w1x and w1x+b1
 			      w1x_plus_b1::Array{Float64,1} = Net.w[1]*xBatch[n] + Net.b[1]
 			      # Get activations
-            z[n] = forward(z[n], Net, activation, w1x_plus_b1)
+            forward!(z[n], Net, activation, w1x_plus_b1)
 		    end
 
 		    # Correct equals true if prediction is correct. Otherwise equals false.
@@ -270,6 +258,7 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 	  nBatches = trunc(Int64, length(yTrain) / batchsize)
 	  nSamples = length(yTrain) - (length(yTrain)%batchsize)
 	  #Allocate arrays to save training metrics to
+    correctArray = zeros(Int16, batchsize)
 	  J_batch = zeros(Float64, batchsize)
 	  z_batch = [[zeros(Float64, N) for N in nNeurons[2:end]] for i=1:batchsize]
 	  ∇w_batch = [[zeros(Float64, (nNeurons[n+1], nNeurons[n])) for n = 1:Net.nLayers] for i=1:batchsize]
@@ -313,13 +302,12 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 				        w1x_plus_b1::Array{Float64,1} = Net.w[1]*xBatch[n] + Net.b[1]
 
                 # Get activations
-                z_batch[n] = forward(z_batch[n], Net, ReLU, w1x_plus_b1);
-                # zff = deepcopy(z_batch[n])
+                forward!(z_batch[n], Net, ReLU, w1x_plus_b1);
+                correctArray[n] = ((argmax(z_batch[n][end])-1)==yBatch[n])
 							  z_batch[n][end] = [yBatch[n]+1==k for k=1:10]
                 z_batch[n] = run_LPOM_inference(xBatch[n], z_batch[n], denoms, Net, numIter, activation)
-                # println("::::", zff[1]==z_batch[n][1])
                 # Get Gradient and update weights
-                ∇w_batch[n], ∇b_batch[n] = get_∇(∇w_batch[n], ∇b_batch[n], xBatch[n], w1x_plus_b1, z_batch[n], activation, Net)
+                get_∇!(∇w_batch[n], ∇b_batch[n], xBatch[n], w1x_plus_b1, z_batch[n], activation, Net)
 
                 # Get loss
                 J_batch[n] = get_loss(Net, w1x_plus_b1, z_batch[n], activation)
@@ -330,7 +318,7 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 			      J += sum(J_batch)
 			      # Correct equals true if prediction is correct. Otherwise equals false.
 			      # z_out = [zk[end] for zk in z_batch]
-			      # correct += sum((argmax.(z_out).-1).==yBatch)
+			      correct += sum(correctArray)
 
 			      Net.w -= η * ∇w
 			      Net.b -= η * ∇b
@@ -340,18 +328,18 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 
 		    end
 
-		    #acc_train = 100*correct/nSamples
+		    acc_train = 100*correct/nSamples
 		    Av_J = J/nSamples
 
         # fb = Net.get_fb(Net)
 		    acc_test = predict(Net, xTest, yTest, testBatchsize, ReLU)
-		    # push!(Net.History["acc_train"], acc_train)
+		    push!(Net.History["acc_train"], acc_train)
 		    push!(Net.History["acc_test"], acc_test)
 		    push!(Net.History["J"], Av_J)
 
 
 		    t1 = time()
-		    println("\nav. metrics: \tJ: $(@sprintf("%.8f", Av_J))\tacc_test: $(@sprintf("%.2f", acc_test))% \tProc. time: $(@sprintf("%.2f", t1-t0))")
+		    println("\nav. metrics: \tJ: $(@sprintf("%.8f", Av_J))\tacc_train: $(@sprintf("%.2f", acc_train))%\tacc_test: $(@sprintf("%.2f", acc_test))% \tProc. time: $(@sprintf("%.2f", t1-t0))")
 
 		    push!(Net.History["runTimes"], t1-t0)
 		    FileIO.save("$outpath", "Net", Net)
