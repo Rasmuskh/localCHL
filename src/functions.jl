@@ -14,13 +14,14 @@ mutable struct Net_CHL
 	  num_updates::Int64
 	  History::Dict{String, Array{Float64,1}}
 end
-Random.seed!(42)
-rng = MersenneTwister(42)
+Random.seed!(22)
+rng = MersenneTwister(3)
 
 function init_network(nNeurons)
 	  """Initialize network weights and allocate arrays for training metric history."""
 	  nLayers = length(nNeurons) - 1
-	  w = [sqrt(2 / nNeurons[i]) * randn(rng, Float64, (nNeurons[i+1], nNeurons[i])) for i = 1:nLayers]
+	  # w = [sqrt(2 / nNeurons[i]) * randn(rng, Float64, (nNeurons[i+1], nNeurons[i])) for i = 1:nLayers]
+    w = [1/sqrt(nNeurons[i] * nNeurons[i+1]) * randn(rng, Float64, (nNeurons[i+1], nNeurons[i])) for i = 1:nLayers]
 	  b = [zeros(Float64, (nNeurons[i+1])) for i = 1:nLayers]
 
 	  num_updates = 0
@@ -31,61 +32,68 @@ function init_network(nNeurons)
 	      "acc_test" => Float64[],
 	      "J" => Float64[],
     )
-    
+
 	  # Network struct
 	  Net = Net_CHL(nNeurons, nLayers, w, b, num_updates, History)
 	  println("Network initialized")
 	  return Net
 end
 
+"""ReLU function: Clamps input between 0 and infinity"""
 function ReLU(PreActivation)
-    """ReLU function: Clamps input between 0 and infinity"""
     return max.(0, PreActivation)
 end
 
+"""Hard sigmoid function: Clamps input between 0 and 1"""
+function HardSigmoid(PreActivation)
+    return min.(1, max.(0, PreActivation))
+end
+
 function Linear(PreActivation)
-    """ReLU function: Clamps input between 0 and infinity"""
     return PreActivation
 end
 
+
+
+"""Simple feed-forward pass"""
 function forward!(z, Net, activation, w1x_plus_b1)
-    """Simple feed-forward pass"""
-    z[1] = activation(w1x_plus_b1)
+    z[1] = activation[1](w1x_plus_b1)
+
     @inbounds for i = 2:Net.nLayers-1
-        z[i] =  activation(Net.w[i] * z[i-1] + Net.b[i])
+        z[i] =  activation[i](Net.w[i] * z[i-1] + Net.b[i])
     end
+
     #The final layer is linear
     L = Net.nLayers
-    z[L] = Net.w[L] * z[L-1] + Net.b[L]
+    z[L] = activation[L](Net.w[L] * z[L-1] + Net.b[L])
 end
 
 function get_loss(Net, w1x_plus_b1, z, activation)
     #TODO: Avoid unnecesary allocations by using inplace operations.
-    a = activation(w1x_plus_b1)
+    # First layer
+    a = activation[1](w1x_plus_b1)
     J = 0.5*BLAS.dot(z[1], z[1]) - z[1]'*(w1x_plus_b1) + 0.5*BLAS.dot(a, a)
+    # Subsequent layers
     for i=2:Net.nLayers
         a = Net.w[i]*z[i-1] + Net.b[i]
         J += 0.5*BLAS.dot(z[i], z[i]) - z[i]'*a
-        a = activation(a)
+        a = activation[i](a)
         J += 0.5*BLAS.dot(a, a)
     end
     return J
 end
 
-function run_BCD_LPOM!(x, z, y,
+"""Perform coordinate descent in z."""
+function run_BCD_LPOM!(nInnerIterations, x, z, y,
                        W0, W1, b0, b1,
                        a, b, denoms, w1, c,
                        activation)
-    nPasses = 5
-    # TODO: replace these with inplace operations.
-    # TODO: Use multiple dispatch to make another version of this function,
-    # which accepts precomputed w0x_plus_b0
-    a = W0*x + b0
-    c = y - b1 
+    a .= W0*x .+ b0
+    c .= y .- b1 
     b = W1'*(c)
 
     # Update all neurons in layer nPasses times
-    for pass=1:nPasses
+    for pass=1:nInnerIterations
         c = W1*z
 
         # Iterate through the neurons
@@ -119,33 +127,75 @@ function run_BCD_LPOM!(x, z, y,
     end
 end
 
-function run_LPOM_inference(x, z, denoms, Net, numIter, activation)
-    for i=1:numIter
+"""Perform coordinate descent in z. This version does not take an argument x.
+It assumes that the preactivation a has already been precomputed.
+This is useful for the first layer."""
+function run_BCD_LPOM!(nInnerIterations, z, y,
+                       W0, W1, b0, b1,
+                       a, b, denoms, w1, c,
+                       activation)
+    c .= y .- b1 
+    b = W1'*(c)
+
+    # Update all neurons in layer nPasses times
+    for pass=1:nInnerIterations
+        c = W1*z
+
+        # Iterate through the neurons
+        for i=1:length(z)
+            z_old = z[i]
+            for j = 1:length(y)
+                w1[j] = W1[j,i]#Check if rows and columns should be switched here
+            end
+
+            # Compute u_j
+            u = 0.0
+            for j=1:length(y)
+                cc = c[j] + b1[j] # cc = [W1z+b1][j] at this point
+                if cc<0.0
+                    u -= w1[j]*cc
+                end
+            end
+            # Compute c
+            for j = 1:length(y)
+                c[j] -= w1[j]*z_old
+            end
+
+            z_new = (a[i] + b[i] - BLAS.dot(c, w1) - u)/denoms[i]
+
+            z_new = activation(z_new)
+            for j = 1:length(y)
+                c[j] += w1[j]*z_new
+            end
+            z[i] = z_new
+        end
+    end
+end
+
+function run_LPOM_inference(x, w1x_plus_b1, z, denoms, Net, nOuterIterations, nInnerIterations, activation)
+    for i=1:nOuterIterations
         # Backwards through the layers
         # On the first iteration i=1 we start infering at layer nLayers-1
         # On subsequent iterations i>1 we start at nLayers-2 since the last thing updated in the previous
         # iterations was layer nLayers -1.
         startLayer = Net.nLayers-1-(i>1) 
         for k=startLayer:-1:2
-            # println("Layer ", k)
-            run_BCD_LPOM!(z[k-1], z[k], z[k+1],
+            run_BCD_LPOM!(nInnerIterations, z[k-1], z[k], z[k+1],
                           Net.w[k], Net.w[k+1], Net.b[k], Net.b[k+1],
                           similar(z[k]), similar(z[k]), denoms[k], similar(z[k+1]), similar(z[k+1]),
-                          activation)
+                          activation[k])
         end
         # First layer
-        # println("Layer ", 1)
-        run_BCD_LPOM!(x, z[1], z[2],
+        run_BCD_LPOM!(nInnerIterations, z[1], z[2],
                       Net.w[1], Net.w[2], Net.b[1], Net.b[2],
-                      similar(z[1]), similar(z[1]), denoms[1], similar(z[2]), similar(z[2]),
-                      activation)
+                      w1x_plus_b1, similar(z[1]), denoms[1], similar(z[2]), similar(z[2]),
+                      activation[1])
         # Forwards through layers
         for k=2:Net.nLayers-1
-            # println("Layer ", k)
-            run_BCD_LPOM!(z[k-1], z[k], z[k+1],
+            run_BCD_LPOM!(nInnerIterations, z[k-1], z[k], z[k+1],
                           Net.w[k], Net.w[k+1], Net.b[k], Net.b[k+1],
                           similar(z[k]), similar(z[k]), denoms[k], similar(z[k+1]), similar(z[k+1]),
-                          activation)
+                          activation[k])
         end
     end
     return z
@@ -163,12 +213,12 @@ end
 
 
 function get_∇!(∇w, ∇b, x, w1x_plus_b1, z, activation, Net)
-    # First layers weights
-    ∇b[1] = activation(w1x_plus_b1) - z[1]
+    # First layer
+    ∇b[1] = activation[1](w1x_plus_b1) - z[1]
     ∇w[1] = ∇b[1]*x'
-    #subsequent layers
+    # Subsequent layers
     for i=2:Net.nLayers
-        ∇b[i] = activation(Net.w[i]*z[i-1] + Net.b[i]) - z[i]
+        ∇b[i] = activation[i](Net.w[i]*z[i-1] + Net.b[i]) - z[i]
         ∇w[i] = ∇b[i]*z[i-1]'
     end
 end
@@ -176,7 +226,6 @@ end
 function predict(Net, x, y, batchsize, activation)
 	  """Train an MLP. Training is parallel across datapoints."""
 
-	  L = Net.nLayers-1
 	  nNeurons = Net.nNeurons
 
 	  nBatches = trunc(Int64, length(y) / batchsize)
@@ -249,7 +298,7 @@ function update_weights_ADAM(Net, η, ∇w, ∇b, M_w, M_b, V_w, V_b)
 
 end
 
-function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsize, nEpochs, η, numIter, activation, outpath)
+function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsize, nEpochs, η, nOuterIterations, nInnerIterations, activation, outpath)
 	  """Train an MLP. Training is parallel across datapoints."""
 
 	  L = Net.nLayers
@@ -296,16 +345,15 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 
             # precompute
             denoms = [[(1 + sum(abs2,w[:,i])) for i=1:Net.nNeurons[layer+1]] for (layer, w) in enumerate(Net.w[2:end])]
-
             Threads.@threads for n = 1:batchsize
                 # Precompute w1x+b1
-				        w1x_plus_b1::Array{Float64,1} = Net.w[1]*xBatch[n] + Net.b[1]
+				        w1x_plus_b1 = Net.w[1]*xBatch[n] + Net.b[1]
 
                 # Get activations
-                forward!(z_batch[n], Net, ReLU, w1x_plus_b1);
+                forward!(z_batch[n], Net, activation, w1x_plus_b1);
                 correctArray[n] = ((argmax(z_batch[n][end])-1)==yBatch[n])
 							  z_batch[n][end] = [yBatch[n]+1==k for k=1:10]
-                z_batch[n] = run_LPOM_inference(xBatch[n], z_batch[n], denoms, Net, numIter, activation)
+                z_batch[n] = run_LPOM_inference(xBatch[n], w1x_plus_b1, z_batch[n], denoms, Net, nOuterIterations, nInnerIterations, activation)
                 # Get Gradient and update weights
                 get_∇!(∇w_batch[n], ∇b_batch[n], xBatch[n], w1x_plus_b1, z_batch[n], activation, Net)
 
@@ -332,7 +380,7 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 		    Av_J = J/nSamples
 
         # fb = Net.get_fb(Net)
-		    acc_test = predict(Net, xTest, yTest, testBatchsize, ReLU)
+		    acc_test = predict(Net, xTest, yTest, testBatchsize, activation)
 		    push!(Net.History["acc_train"], acc_train)
 		    push!(Net.History["acc_test"], acc_test)
 		    push!(Net.History["J"], Av_J)

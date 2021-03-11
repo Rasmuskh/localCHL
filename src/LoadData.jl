@@ -34,14 +34,16 @@ function loadData(dataset, trainSamples, testSamples)
         #Training data
         yTrain = MNIST.trainlabels()
         xTrain = MNIST.traintensor()
-    	xTrain = convert(Array{Float64}, xTrain)
+    	  xTrain = convert(Array{Float64}, xTrain)
         xTrain = [vec(xTrain[:, :, i]) for i=1:length(yTrain)]
+        # xTrain = [vec((xTrain[:,:,i].-0.1307)./0.3081) for i=1:length(yTrain)];
 
         #Testing data
         yTest = MNIST.testlabels()
-    	xTest = MNIST.testtensor()
-    	xTest = convert(Array{Float64}, xTest)
+    	  xTest = MNIST.testtensor()
+    	  xTest = convert(Array{Float64}, xTest)
         xTest = [vec(xTest[:, :, i]) for i=1:length(yTest)]
+        # xTest = [vec((xTest[:,:,i].-0.1307)./0.3081) for i=1:length(yTest)];
 
     elseif dataset=="FMNIST"
         #Training data
