@@ -11,13 +11,14 @@ mutable struct Net_CHL
 	  nLayers::Int64
 	  w::Array{Array{Float64, 2},1}
 	  b::Array{Array{Float64, 1},1}
+    highLim::Array{Float64,1}
 	  num_updates::Int64
 	  History::Dict{String, Array{Float64,1}}
 end
 Random.seed!(22)
 rng = MersenneTwister(3)
 
-function init_network(nNeurons)
+function init_network(nNeurons, highLim)
 	  """Initialize network weights and allocate arrays for training metric history."""
 	  nLayers = length(nNeurons) - 1
 	  # w = [sqrt(2 / nNeurons[i]) * randn(rng, Float64, (nNeurons[i+1], nNeurons[i])) for i = 1:nLayers]
@@ -34,7 +35,7 @@ function init_network(nNeurons)
     )
 
 	  # Network struct
-	  Net = Net_CHL(nNeurons, nLayers, w, b, num_updates, History)
+	  Net = Net_CHL(nNeurons, nLayers, w, b, highLim, num_updates, History)
 	  println("Network initialized")
 	  return Net
 end
@@ -53,44 +54,94 @@ function Linear(PreActivation)
     return PreActivation
 end
 
-
+# function Clamp(z, low::Float64=0.0, high::Float64=Inf)
+#     return min.(high, max.(low, z))
+# end
 
 """Simple feed-forward pass"""
 function forward!(z, Net, activation, w1x_plus_b1)
     z[1] = activation[1](w1x_plus_b1)
 
     @inbounds for i = 2:Net.nLayers-1
-        z[i] =  activation[i](Net.w[i] * z[i-1] + Net.b[i])
+        z[i] =  activation[i](Net.w[i] * z[i-1] .+ Net.b[i])
     end
 
     #The final layer is linear
     L = Net.nLayers
-    z[L] = activation[L](Net.w[L] * z[L-1] + Net.b[L])
+    z[L] = activation[L](Net.w[L] * z[L-1] .+ Net.b[L])
 end
+
+# # ReLU implementations loss
+# function get_loss(Net, w1x_plus_b1, z, activation)
+#     #TODO: Avoid unnecesary allocations by using inplace operations.
+#     # First layer
+#     a = activation[1](w1x_plus_b1)
+#     J = 0.5*BLAS.dot(z[1], z[1]) - z[1]'*(w1x_plus_b1) + 0.5*BLAS.dot(a, a)
+#     # Subsequent layers
+#     for i=2:Net.nLayers
+#         a = Net.w[i]*z[i-1] + Net.b[i]
+#         J += 0.5*BLAS.dot(z[i], z[i]) - z[i]'*a
+#         a = activation[i](a)
+#         J += 0.5*BLAS.dot(a, a)
+#     end
+#     return J
+# end
 
 function get_loss(Net, w1x_plus_b1, z, activation)
     #TODO: Avoid unnecesary allocations by using inplace operations.
+    # Preallocated dummy variables a and b might also be useful
     # First layer
-    a = activation[1](w1x_plus_b1)
-    J = 0.5*BLAS.dot(z[1], z[1]) - z[1]'*(w1x_plus_b1) + 0.5*BLAS.dot(a, a)
+    a = w1x_plus_b1
+    b = a - z[1]
+    J = 0.5*BLAS.dot(b,b)
+
+    b = a - activation[1](a)
+    J -= 0.5*BLAS.dot(b,b)
+
     # Subsequent layers
     for i=2:Net.nLayers
         a = Net.w[i]*z[i-1] + Net.b[i]
-        J += 0.5*BLAS.dot(z[i], z[i]) - z[i]'*a
-        a = activation[i](a)
-        J += 0.5*BLAS.dot(a, a)
+        b = a - z[i]
+        J += 0.5*BLAS.dot(b, b)
+        b = a - activation[i](a)
+        J -= 0.5*BLAS.dot(b,b)
     end
     return J
 end
+
+function get_loss2(Net, w1x_plus_b1, z, activation)
+    #TODO: Avoid unnecesary allocations by using inplace operations.
+    # Preallocated dummy variables a and b might also be useful
+    # First layer
+    a = w1x_plus_b1
+    b = a - z[1]
+    J = 0.5*BLAS.dot(b,b)
+
+    b = a - activation[1](a)
+    J -= 0.5*BLAS.dot(b,b)
+
+    # Subsequent layers
+    for i=2:Net.nLayers
+        a = Net.w[i]*z[i-1] .+ Net.b[i]
+        b = a - z[i]
+        J += 0.5*BLAS.dot(b, b)
+        b = a - activation[i](a)
+        J -= 0.5*BLAS.dot(b,b)
+    end
+    return J
+end
+
+
 
 """Perform coordinate descent in z."""
 function run_BCD_LPOM!(nInnerIterations, x, z, y,
                        W0, W1, b0, b1,
                        a, b, denoms, w1, c,
-                       activation)
+                       activation, high)
     a .= W0*x .+ b0
     c .= y .- b1 
     b = W1'*(c)
+
 
     # Update all neurons in layer nPasses times
     for pass=1:nInnerIterations
@@ -99,30 +150,28 @@ function run_BCD_LPOM!(nInnerIterations, x, z, y,
         # Iterate through the neurons
         for i=1:length(z)
             z_old = z[i]
-            for j = 1:length(y)
-                w1[j] = W1[j,i]#Check if rows and columns should be switched here
-            end
+            w1 = view(W1, :, i)
 
             # Compute u_j
             u = 0.0
+            v = 0.0
+
             for j=1:length(y)
-                cc = c[j] + b1[j] # cc = [W1z+b1][j] at this point
+                cc = c[j] + b1[j] # cc = [W1z+b1][j]
                 if cc<0.0
                     u -= w1[j]*cc
+                elseif (cc-high)>0.0
+                    v -= (w1[j]*cc - high)
                 end
             end
-            # Compute c
-            for j = 1:length(y)
-                c[j] -= w1[j]*z_old
-            end
+            # Update c
+            c .-= w1.*z_old
 
-            z_new = (a[i] + b[i] - BLAS.dot(c, w1) - u)/denoms[i]
+            # Update z
+            z[i] = activation((a[i] + b[i] - BLAS.dot(c, w1) - u - v)*denoms[i])
 
-            z_new = activation(z_new)
-            for j = 1:length(y)
-                c[j] += w1[j]*z_new
-            end
-            z[i] = z_new
+            # Update C
+            c .+= w1.*z[i]#z_new
         end
     end
 end
@@ -133,7 +182,7 @@ This is useful for the first layer."""
 function run_BCD_LPOM!(nInnerIterations, z, y,
                        W0, W1, b0, b1,
                        a, b, denoms, w1, c,
-                       activation)
+                       activation, high)
     c .= y .- b1 
     b = W1'*(c)
 
@@ -144,30 +193,27 @@ function run_BCD_LPOM!(nInnerIterations, z, y,
         # Iterate through the neurons
         for i=1:length(z)
             z_old = z[i]
-            for j = 1:length(y)
-                w1[j] = W1[j,i]#Check if rows and columns should be switched here
-            end
+            w1 = view(W1, :, i)
 
             # Compute u_j
             u = 0.0
+            v = 0.0
             for j=1:length(y)
-                cc = c[j] + b1[j] # cc = [W1z+b1][j] at this point
+                cc = c[j] + b1[j] # cc = [W1z+b1][j]
                 if cc<0.0
                     u -= w1[j]*cc
+                elseif (cc-high)>0.0
+                    v -= (w1[j]*cc - high)
                 end
             end
-            # Compute c
-            for j = 1:length(y)
-                c[j] -= w1[j]*z_old
-            end
+            # Update c
+            c .-= w1.*z_old
 
-            z_new = (a[i] + b[i] - BLAS.dot(c, w1) - u)/denoms[i]
+            # Update z
+            z[i] = activation((a[i] + b[i] - BLAS.dot(c, w1) - u - v)*denoms[i])
 
-            z_new = activation(z_new)
-            for j = 1:length(y)
-                c[j] += w1[j]*z_new
-            end
-            z[i] = z_new
+            # Update C
+            c .+= w1.*z[i]#z_new
         end
     end
 end
@@ -183,19 +229,19 @@ function run_LPOM_inference(x, w1x_plus_b1, z, denoms, Net, nOuterIterations, nI
             run_BCD_LPOM!(nInnerIterations, z[k-1], z[k], z[k+1],
                           Net.w[k], Net.w[k+1], Net.b[k], Net.b[k+1],
                           similar(z[k]), similar(z[k]), denoms[k], similar(z[k+1]), similar(z[k+1]),
-                          activation[k])
+                          activation[k], Net.highLim[k])
         end
         # First layer
         run_BCD_LPOM!(nInnerIterations, z[1], z[2],
                       Net.w[1], Net.w[2], Net.b[1], Net.b[2],
                       w1x_plus_b1, similar(z[1]), denoms[1], similar(z[2]), similar(z[2]),
-                      activation[1])
+                      activation[1], Net.highLim[1])
         # Forwards through layers
         for k=2:Net.nLayers-1
             run_BCD_LPOM!(nInnerIterations, z[k-1], z[k], z[k+1],
                           Net.w[k], Net.w[k+1], Net.b[k], Net.b[k+1],
                           similar(z[k]), similar(z[k]), denoms[k], similar(z[k+1]), similar(z[k+1]),
-                          activation[k])
+                          activation[k], Net.highLim[k])
         end
     end
     return z
@@ -260,8 +306,6 @@ function predict(Net, x, y, batchsize, activation)
 	  end
 
 	  Av_accuracy = 100*correct/nSamples
-
-	  println("\nTraining finished\n")
 
 	  return Av_accuracy
 end
@@ -344,7 +388,7 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 			      yBatch = @view yTrain[start:stop]
 
             # precompute
-            denoms = [[(1 + sum(abs2,w[:,i])) for i=1:Net.nNeurons[layer+1]] for (layer, w) in enumerate(Net.w[2:end])]
+            denoms = [[1/(1 + sum(abs2,view(w, :, i))) for i=1:Net.nNeurons[layer+1]] for (layer, w) in enumerate(Net.w[2:end])]
             Threads.@threads for n = 1:batchsize
                 # Precompute w1x+b1
 				        w1x_plus_b1 = Net.w[1]*xBatch[n] + Net.b[1]
@@ -372,7 +416,7 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 			      Net.b -= η * ∇b
 			      # update_weights_ADAM(Net, η, ∇w, ∇b, M_w, M_b, V_w, V_b)
 
-			      #print("\r$(@sprintf("%.2f", 100*batchIndex/nBatches))% complete")
+			      # print("\r$(@sprintf("%.2f", 100*batchIndex/nBatches))% complete")
 
 		    end
 
@@ -392,6 +436,169 @@ function trainThreads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsiz
 		    push!(Net.History["runTimes"], t1-t0)
 		    FileIO.save("$outpath", "Net", Net)
 	  end
-	  println("\nTraining finished")
+end
+
+
+function run_LPOM_inferenceBatch(X, w1x_plus_b1, Z, denoms, Net, nOuterIterations, nInnerIterations, activation)
+    for i=1:nOuterIterations
+        # Backwards through the layers
+        # On the first iteration i=1 we start infering at layer nLayers-1
+        # On subsequent iterations i>1 we start at nLayers-2 since the last thing updated in the previous
+        # iterations was layer nLayers -1.
+        startLayer = Net.nLayers-1-(i>1) 
+        for k=startLayer:-1:2
+            run_BCD_LPOM_batch!(nInnerIterations, Z[k-1], Z[k], Z[k+1],
+                           Net.w[k], Net.w[k+1], Net.b[k], Net.b[k+1],
+                           similar(Z[k]), similar(Z[k]), denoms[k], similar(Z[k+1]), similar(Z[k+1]),
+                          activation[k], Net.highLim[k],
+                          similar(Z[k]), similar(Z[k]))
+        end
+        # First layer
+        run_BCD_LPOM_batch!(nInnerIterations, X, Z[1], Z[2],
+                      Net.w[1], Net.w[2], Net.b[1], Net.b[2],
+                      similar(Z[1]), similar(Z[1]), denoms[1], similar(Z[2]), similar(Z[2]),
+                      activation[1], Net.highLim[1],
+                      similar(Z[1]), similar(Z[1]))
+ 
+        # Forwards through layers
+        for k=2:Net.nLayers-1
+            run_BCD_LPOM_batch!(nInnerIterations, Z[k-1], Z[k], Z[k+1],
+                          Net.w[k], Net.w[k+1], Net.b[k], Net.b[k+1],
+                          similar(Z[k]), similar(Z[k]), denoms[k], similar(Z[k+1]), similar(Z[k+1]),
+                          activation[k], Net.highLim[k],
+                          similar(Z[k]), similar(Z[k]))
+        end
+    end
+    return Z
+end
+
+
+
+"""Perform coordinate descent in z."""
+function run_BCD_LPOM_batch!(nInnerIterations, X, Z, Y,
+                       W0, W1, b0, b1,
+                       a, b, denoms, w1, c,
+                       activation, high,
+                       U, V)
+    a .= W0*X .+ b0
+    c .= Y .- b1 
+    b .= W1'*(c)
+    batchsize = length(Z[1,:])
+
+    # wTwZ = W1'*W1*Z
+    # U = W1'*ReLU(-W1*Z .- b1)
+    # V = W1'*ReLU(W1*Z .+ b1 .-1)
+
+    # Update all neurons in layer nInnerIterations times
+    for pass=1:nInnerIterations
+        c = W1*Z # Does using "."  speed things up here?
+
+        # Iterate through neurons
+        for i=1:length(Z[:,1])
+            Z_old = view(Z, i, :)
+
+            w1 = view(W1, :, i)
+
+            # wTwZ = w1'*c
+            # U = W1'*ReLU(-c .- b1)
+            # V = W1'*ReLU(c .+ b1 .-1)
+
+            # #V = Net.w[k+1]'*ReLU(Net.w[k+1]*Z[k] .+ Net.b[k+1] .-1)
+
+            # # compute u and v
+
+            # subtract z_olds contribution from c
+            # for col=1:batchsize
+            #     c[:,col] .-= w1.*Z_old[col]
+            # end
+            # # compute z_new
+            Z[i,:] .= denoms[i].*(view(a, i, :) .+ view(b, i, :))
+            # # add z_news contribution from c
+            # for col=1:batchsize
+            #     c[:,col] .+= w1.*Z_old[col]
+            # end
+        end
+    end
+
+    # Update all neurons in layer nPasses times
+    # for pass=1:nInnerIterations
+    #     c = W1*z #update c
+
+    #     # Iterate through the neurons
+    #     for i=1:length(z)
+    #         z_old = z[i]
+    #         for j = 1:length(y)
+    #             w1[j] = W1[j,i]#Check if rows and columns should be switched here
+    #         end
+
+    #         # Compute u_j
+    #         u = 0.0
+    #         v = 0.0
+    #         for j=1:length(y)
+    #             cc = c[j] + b1[j] # cc = [W1z+b1][j] at this point
+    #             if cc<0.0
+    #                 u -= w1[j]*cc
+    #             elseif (cc-high)>0.0
+    #                 v -= (w1[j]*cc - high)
+    #             end
+    #         end
+    #         # Compute c
+    #         for j = 1:length(y)
+    #             c[j] -= w1[j]*z_old #update c
+    #         end
+
+    #         z_new = (a[i] + b[i] - BLAS.dot(c, w1) - u - v)/denoms[i]
+
+    #         z_new = activation(z_new)
+    #         for j = 1:length(y)
+    #             c[j] += w1[j]*z_new #update c
+    #         end
+    #         z[i] = z_new
+    #     end
+    # end
+
+    # Update all neurons in layer nPasses times
+end
+
+
+function trainBatches(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsize, nEpochs, η, nOuterIterations, nInnerIterations, activation, outpath)
+	  #Loop across epochs
+	  for epoch = 1:nEpochs
+        # Restart clock
+		    t=0; t0 = time()
+		    #Shuffle data
+		    order = randperm(length(yTrain))
+		    xTrain = xTrain[order]
+		    yTrain = yTrain[order]
+        # If number of training datapoints is not divisible by batchsize,
+        # then the remainders wont be used this epoch.g
+        nSamples = length(yTrain) - (length(yTrain)%batchsize)
+
+		    # And a variable for counting batch number
+		    batchIndex::Int64 = 0
+		    correct::Int64 = 0
+		    J::Float64 = 0
+        Z = [zeros(Float64, (N,batchsize)) for N in Net.nNeurons[2:end]];
+		    # Loop through mini batches
+		    for i = 1:batchsize:nSamples
+            batchIndex += 1
+			      start = i
+			      stop = start + batchsize - 1
+			      xBatch = @view xTrain[start:stop]
+			      yBatch = @view yTrain[start:stop]
+
+            X = reduce(hcat, xTrain[1:batchsize])
+            # precompute
+            denoms = [[1/(1 + sum(abs2,w[:,i])) for i=1:Net.nNeurons[layer+1]] for (layer, w) in enumerate(Net.w[2:end])]
+
+            w1x_plus_b1 = Net.w[1]*X.+Net.b[1]
+            forward!(Z, Net, activation, w1x_plus_b1);
+            run_LPOM_inferenceBatch(X, w1x_plus_b1, Z, denoms, Net, nOuterIterations, nInnerIterations, activation)
+            #infer activations
+            #Compute gradient
+            J = get_loss2(Net, w1x_plus_b1, Z, activation)
+
+        end
+    end
 end
 
