@@ -31,32 +31,7 @@ function getdata(batchsize, trainsamples, testsamples)
     return train_loader, test_loader
 end
 
-"""Probably not needed anymore"""
-function lifted_E_layer1(x, z, W0, b0)
-    a = W0*x .+ b0 .- z
-    return BLAS.dot(a,a)
-end
 
-"""Probably not needed anymore"""
-function lifted_loss_layer1(x, z_hat, z_free, W0, b0, β)
-    E_hat = lifted_E_layer1(x, z_hat, W0, b0)
-    E_free = lifted_E_layer1(x, z_free, W0, b0)
-    return (E_hat - E_free)/β
-end
-
-"""Probably not needed anymore"""
-# function loss(x, y)
-#     pred = Net(x)
-#     mse(y, pred)
-#     #sum((target .- y).^2)
-# end
-
-"""Probably not needed anymore"""
-# function loss_2nd_layer_onwards(z, y)
-#     pred = Net[2:end](z)
-#     mse(y, pred)
-#     #sum((target .- y).^2)
-# end
 
 
 
@@ -101,30 +76,6 @@ function train_BP(Net, batchsize, opt, nEpochs, trainsamples, testsamples)
     return Net
 end
 
-"""Probably not needed anymore"""
-function maximize_gap_batch(x, ∇z1_free, W0, b0, β0, βmax, E_z1_free, activation)
-    β = β0
-    β_best = 0
-    ΔE_best = 0
-    #println(b0)
-    z1_hat_best = similar(b0) #z1 has the same shape size as b0
-    i = 0
-    while β<βmax
-        i += 1
-        z1_hat = get_z1_hat(x, W0, b0, β, ∇z1_free, activation)
-        E_z1_hat = lifted_E_layer1(x, z1_hat, W0, b0)
-        ΔE = (E_z1_hat - E_z1_free)/β #  E_z1_free not really necessary here as it is constant!
-        if (ΔE > ΔE_best) || (i==1)
-            ΔE_best = ΔE
-            β_best = β
-            z1_hat_best = z1_hat
-        #elseif ΔE<ΔE_best
-        #    break
-        end
-        β *= 2
-    end
-    return (β_best, z1_hat_best)
-end
 
 """Probably not needed anymore"""
 function get_z1_hat(x, W0, b0, β, ∇z1_free, activation)
@@ -194,9 +145,10 @@ function f(X, z1_free, ∇z1_free, W1, b1, activation)
     ∇W1 = mean(∇W1_batch)
     ∇b1 = mean(∇b1_batch)
 
-    # β = 4096.0
-    # z1_hat = get_z1_hat(X, W1, b1, β, ∇z1_free, activation)
-    # ∇b1, ∇W1 = get_∇θ1(X, z1_hat, z1_free, W1, b1, β, batchsize)
+    ## For debugging
+    ## β = 4096.0
+    ## z1_hat = get_z1_hat(X, W1, b1, β, ∇z1_free, activation)
+    ## ∇b1, ∇W1 = get_∇θ1(X, z1_hat, z1_free, W1, b1, β, batchsize)
 
     return (∇b1, ∇W1, β_av, β_std)
 end
