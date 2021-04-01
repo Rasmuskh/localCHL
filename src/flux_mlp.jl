@@ -2,12 +2,19 @@ using Flux, Statistics
 using Flux.Data: DataLoader
 using Flux: onehotbatch, onecold, @epochs
 using Flux.Losses: logitcrossentropy
+using Flux.Losses: mse
 using Base: @kwdef
 using CUDA
 using MLDatasets
+using Random; Random.seed!(32); rng = MersenneTwister(13)
+#=
+This file is based on the Flux model zoo's MNIST MLP example:
+https://github.com/FluxML/model-zoo/tree/master/vision/mlp_mnist
+=#
 
+#LinearAlgebra.BLAS.set_num_threads(8)
 
-function getdata(args, device)
+function getdata(batchsize, device)
     ENV["DATADEPS_ALWAYS_ACCEPT"] = "true"
 
     # Loading Dataset	
@@ -22,45 +29,37 @@ function getdata(args, device)
     ytrain, ytest = onehotbatch(ytrain, 0:9), onehotbatch(ytest, 0:9)
 
     # Create DataLoaders (mini-batch iterators)
-    train_loader = DataLoader((xtrain, ytrain), batchsize=args.batchsize, shuffle=true)
-    test_loader = DataLoader((xtest, ytest), batchsize=args.batchsize)
+    train_loader = DataLoader((xtrain, ytrain), batchsize=batchsize, shuffle=true)
+    test_loader = DataLoader((xtest, ytest), batchsize=batchsize)
 
     return train_loader, test_loader
 end
 
-function build_model(; imgsize=(28,28,1), nclasses=10)
-    return Chain(
- 	      Dense(prod(imgsize), 500, relu),
-        Dense(500, 500, relu),
-            Dense(500, nclasses))
-end
+# function build_model(; imgsize=(28,28,1), nclasses=10)
+#     return Chain(
+#  	      Dense(prod(imgsize), 64, HS),
+#         Dense(64, 64, HS),
+#         Dense(64, nclasses, HS))
+# end
 
-function loss_and_accuracy(data_loader, model, device)
+function loss_and_accuracy(data_loader, Net, device)
     acc = 0
     ls = 0.0f0
     num = 0
     for (x, y) in data_loader
         x, y = device(x), device(y)
-        ŷ = model(x)
-        ls += logitcrossentropy(model(x), y, agg=sum)
-        acc += sum(onecold(cpu(model(x))) .== onecold(cpu(y)))
+        ŷ = Net(x)
+        # ls += logitcrossentropy(model(x), y, agg=sum)
+        ls += mse(Net(x), y, agg=sum)
+        acc += sum(onecold(cpu(Net(x))) .== onecold(cpu(y)))
         num +=  size(x, 2)
     end
     return ls / num, acc / num
 end
 
+function train_flux(Net, η, batchsize, nEpochs, use_cuda)
 
-@kwdef mutable struct Args
-    η::Float64 = 3e-4       # learning rate
-    batchsize::Int = 64    # batch size
-    epochs::Int = 100        # number of epochs
-    use_cuda::Bool = false   # use gpu (if cuda available)
-end
-
-function train(; kws...)
-    args = Args(; kws...) # collect options in a struct for convenience
-
-    if CUDA.functional() && args.use_cuda
+    if CUDA.functional() && use_cuda
         @info "Training on CUDA GPU"
         CUDA.allowscalar(false)
         device = gpu
@@ -70,36 +69,46 @@ function train(; kws...)
     end
 
     # Create test and train dataloaders
-    train_loader, test_loader = getdata(args, device)
+    train_loader, test_loader = getdata(batchsize, device)
 
-    # Construct model
-    model = build_model() |> device
-    ps = Flux.params(model) # model's trainable parameters
+    # access trainable parameters
+    ps = Flux.params(Net) # model's trainable parameters
 
     ## Optimizer
-    opt = ADAM(args.η)
+    opt = Descent(η) #SGD
+    #opt = ADAM(args.η)
 
     ## Training
-    for epoch in 1:args.epochs
+    for epoch in 1:nEpochs
         t1 = time()
         for (x, y) in train_loader
             x, y = device(x), device(y) # transfer data to device
-            gs = gradient(() -> logitcrossentropy(model(x), y), ps) # compute gradient
+            # gs = gradient(() -> logitcrossentropy(model(x), y), ps) # compute gradient
+            gs = gradient(() -> mse(Net(x), y), ps) # compute gradient
             Flux.Optimise.update!(opt, ps, gs) # update parameters
         end
 
         # Report on train and test
-        train_loss, train_acc = loss_and_accuracy(train_loader, model, device)
-        test_loss, test_acc = loss_and_accuracy(test_loader, model, device)
+        train_loss, train_acc = loss_and_accuracy(train_loader, Net, device)
+        test_loss, test_acc = loss_and_accuracy(test_loader, Net, device)
         t2 = time()
         println("Epoch=$epoch")
         println("  train_loss = $train_loss, train_accuracy = $train_acc")
         println("  test_loss = $test_loss, test_accuracy = $test_acc")
         println("  Runtime: $(t2-t1)")
     end
-    return model
+    return Net
 end
 
-### Run training 
-model = train()
+
+
+### Run training
+# nNeurons = [784, 64, 64, 10]
+# highLim = [Inf, Inf, Inf, Inf]
+# activation = [relu, relu, relu]
+# init_mode =  "glorot_uniform"
+# Net0 = init_network(nNeurons, highLim, init_mode)
+# NetFlux = LPOM_to_Flux(Net0, activation)
+# NetFlux = train_flux(NetFlux, 0.1, 64, 3, false)
+
 # train(η=0.01) # can change hyperparameters

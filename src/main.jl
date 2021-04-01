@@ -2,9 +2,10 @@ using BenchmarkTools
 using LinearAlgebra
 using Statistics
 using Printf # For formatting numeric output
-using Random
+using Random; Random.seed!(32); rng = MersenneTwister(13)
 using JLD2; # Save and load network dictionaries
 using FileIO; # Save and load network dictionaries
+using Flux
 # Choose datatype
 dType = Float32
 
@@ -13,6 +14,7 @@ include("utilityFunctions.jl")
 include("LoadData.jl")
 include("LPOM.jl")
 include("LPOM_BLAS_Batches.jl")
+include("flux_mlp.jl")
 
 function main()
     # nT = ccall((:openblas_get_num_threads64_, Base.libblas_name), Cint, ())
@@ -22,16 +24,14 @@ function main()
     # println(nT)
 
     # Define model architecture
-    nNeurons = [784, 128, 128, 128, 10]
-    # HS(z) = Clamp(z, 0.0, 1.0)
-    # activation = [HS, HS, HS]
-    # highLim = [1.0, 1.0 ,1.0]
-    activation = [ReLU, ReLU, ReLU, ReLU]
-    highLim = [Inf, Inf, Inf, Inf]
-    # Upper clamping limit: ReLU: Inf, HardSigmoid: 1 (or another finite number)
-
-    Net = init_network(nNeurons, highLim)
-
+    nNeurons = [784, 64, 64, 10]
+    HS(z) = Clamp(z, 0, 1.0)
+    activation = [relu, relu, relu, relu]
+    highLim = [Inf, Inf, Inf, Inf] # Upper clamping limit: ReLU: Inf, HardSigmoid: 1
+    #activation = [HS, HS, HS]
+    #highLim = [1.0, 1.0, 1.0]
+    init_mode =  "glorot_uniform" # Options are: "glorot_uniform" and "glorot_normal" 
+    Net0 = init_network(nNeurons, highLim, init_mode)
     # Load a saved model
     # Net = load("networks/MNIST.jld2")["Net"] #Load old network
 
@@ -42,26 +42,39 @@ function main()
     xTrain, yTrain, xTest, yTest = loadData(dataset, trainSamples, testSamples)
 
     # Hyper parameters
-    nOuterIterations = 2 # 2 seems to be insufficient to perform on par with BP
-    nInnerIterations = 5#10
-    nEpochs = 2
+    nOuterIterations = 2
+    nInnerIterations = 5# for CIFAR 10-15 iterations seems to be needed
+    nEpochs = 20
     batchsize = 64
-    η = 0.5
+    η = 0.5#
     testBatchsize = min(10000, testSamples)
 
     # Where to save the trained model
     outpath = "../networks/$(dataset).jld2"
 
-    # Training loop
-    for epoch=1:nEpochs
+    # Training loopn
+    NetLPOM = deepcopy(Net0)
+    for epoch=1:1
         println("\nEpoch: $epoch")
-        @time trainThreads(Net, xTrain, yTrain, xTest, yTest,
-                           batchsize, testBatchsize, 1, η,
-                           nOuterIterations, nInnerIterations, activation, outpath)
+        @time train_LPOM_threads(NetLPOM, xTrain, yTrain, xTest, yTest,
+                                 batchsize, testBatchsize, nEpochs, η,
+                                 nOuterIterations, nInnerIterations, activation, outpath)
     end
+
+    #BP trained MLP
+    # use_CUDA = false
+    # NetFlux = LPOM_to_Flux(deepcopy(Net0), activation)
+    # NetFlux = train_flux(NetFlux, η, batchsize, nEpochs, use_CUDA)
+
+
+
+return NetLPOM
 end
 
-main()
+Net = main();
+println("Training finished")
+
+
 
 
 

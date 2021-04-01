@@ -1,10 +1,10 @@
 using Plots; # For plotting
-# pyplot(); # Choosing backend for Plots
+plotly()
 
-function plot_filters(Net, nRows, nCols, width, height, imwidth, imheight)
+function plot_filters(W1, nNeurons, nRows, nCols, width, height, imwidth, imheight)
     p = []
 
-    W=[reshape(Net.w[1][i,:], (imwidth, imheight)) for i=1:Net.nNeurons[2]]
+    W=[reshape(W1[i,:], (imwidth, imheight)) for i=1:nNeurons[2]]
     if nCols*nRows>length(W)
         for i=length(W)+1:nCols*nRows
             push!(W, zeros(size(W[1])))
