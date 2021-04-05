@@ -7,7 +7,7 @@ using MLDatasets
 using LinearAlgebra
 using Statistics
 using Random; Random.seed!(3323); rng = MersenneTwister(12333)
-
+include("plottingFunctions.jl")
 
 function getdata(batchsize, trainsamples, testsamples)
 
@@ -30,9 +30,6 @@ function getdata(batchsize, trainsamples, testsamples)
 
     return train_loader, test_loader
 end
-
-
-
 
 
 function loss_and_accuracy(data_loader, Net)
@@ -67,6 +64,7 @@ function train_BP(Net, batchsize, opt, nEpochs, trainsamples, testsamples)
         # Report on train and test
         train_loss, train_acc = loss_and_accuracy(train_loader, Net)
         test_loss, test_acc = loss_and_accuracy(test_loader, Net)
+        #plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/epoch$(epoch).png")
         t2 = time()
         println("Epoch=$epoch")
         println("  train_loss = $train_loss, train_accuracy = $train_acc")
@@ -94,7 +92,10 @@ function get_∇θ1(x, z1_hat, z1_free, W0, b0, β, batchsize)
 end
 
 function f(X, z1_free, ∇z1_free, W1, b1, activation)
+    #TODO: Reduce number of allocations
     batchsize = (size(X)[2])
+    A = W1*X .+ b1
+    a = [ai for ai in eachcol(A)]
     x_batch = [col for col in eachcol(X)]
     z1_free_batch = [col for col in eachcol(z1_free)]
     ∇z1_free_batch = [col for col in eachcol(∇z1_free)]
@@ -104,26 +105,22 @@ function f(X, z1_free, ∇z1_free, W1, b1, activation)
     ∇W1_batch = [similar(W1) for k=1:batchsize]
     ∇b1_batch = [similar(b1) for k=1:batchsize]
 
-    β_best_Arr = [ones(dType, size(b1)) for k=1:batchsize]
-
+    β_best_Arr = [similar(b1) for k=1:batchsize]
+    LinearAlgebra.BLAS.set_num_threads(1)
     Threads.@threads for i=1:batchsize # Loop over datapoints
-
-        # Precompute preactivations
-        a = W1*x_batch[i] .+ b1
-
         for n=1:length(b1) # Loop over neurons
-            β = 1.0;  β_best_Arr[i][n] = β
-            z1_hat_batch[i][n] = activation(a[n] - β*∇z1_free_batch[i][n])
-            E1_hat = ((a[n] - z1_hat_batch[i][n])^2)
-            E1_free = ((a[n] - z1_free_batch[i][n])^2)
+            β = 10.0;  β_best_Arr[i][n] = β
+            z1_hat_batch[i][n] = activation(a[i][n] - β*∇z1_free_batch[i][n])
+            E1_hat = ((a[i][n] - z1_hat_batch[i][n])^2)
+            E1_free = ((a[i][n] - z1_free_batch[i][n])^2)
             ΔE_max = (E1_hat - E1_free)/β
-
+            E1_hat_max = E1_hat
             #Choose β to maximize ΔE = E_hat - E_free
+            #TODO: Optimize this section
             for t=1:8
                 β *= 2
-                z_dummy = activation(a[n] - β*∇z1_free_batch[i][n])
-                E1_hat = ((a[n] - z1_hat_batch[i][n])^2)
-                E1_free = ((a[n] - z1_free_batch[i][n])^2)
+                z_dummy = activation(a[i][n] - β*∇z1_free_batch[i][n])
+                E1_hat = (a[i][n] - z1_hat_batch[i][n])^2
                 ΔE = (E1_hat - E1_free)/β
                 if ΔE>=ΔE_max
                     ΔE_max = ΔE
@@ -134,21 +131,20 @@ function f(X, z1_free, ∇z1_free, W1, b1, activation)
                 end
 
             end
-            #println(β_best)
-            #z1_hat_batch[i][n] = activation(a[n] - 100.0*∇z1_free_batch[i][n])
             ∇b1_batch[i][n] =  (z1_free_batch[i][n] .- z1_hat_batch[i][n])/β_best_Arr[i][n]
             ∇W1_batch[i][n,:] =  ∇b1_batch[i][n]*x_batch[i]'
         end
     end
+    LinearAlgebra.BLAS.set_num_threads(8)
     β_av = sum(reduce(hcat,β_best_Arr))/length(b1)
     β_std = std(reduce(hcat,β_best_Arr))/length(b1)
     ∇W1 = mean(∇W1_batch)
     ∇b1 = mean(∇b1_batch)
 
-    ## For debugging
-    ## β = 4096.0
-    ## z1_hat = get_z1_hat(X, W1, b1, β, ∇z1_free, activation)
-    ## ∇b1, ∇W1 = get_∇θ1(X, z1_hat, z1_free, W1, b1, β, batchsize)
+    # For debugging
+    # β = 4096.0; β_av = 0; β_std = 0
+    # z1_hat = get_z1_hat(X, W1, b1, β, ∇z1_free, activation)
+    # ∇b1, ∇W1 = get_∇θ1(X, z1_hat, z1_free, W1, b1, β, batchsize)
 
     return (∇b1, ∇W1, β_av, β_std)
 end
@@ -160,7 +156,8 @@ function train_hybrid(Net, batchsize, opt, nEpochs,  trainsamples, testsamples)
 
     θ = params(Net)
     activation = relu
-
+    β_av_hist = zeros(dType, nEpochs)
+    β_std_hist = zeros(dType, nEpochs)
     # Training
     for epoch in 1:nEpochs
         t1 = time()
@@ -181,38 +178,43 @@ function train_hybrid(Net, batchsize, opt, nEpochs,  trainsamples, testsamples)
             ∇θ[θ[2]][:] = ∇b1
             Flux.Optimise.update!(opt, θ, ∇θ) # update parameters
         end
-        β_av /= trainsamples # get average batch mean(β)
-        β_std /= trainsamples # get average batch std(β)
+        β_av_hist[epoch] = β_av/trainsamples # get average batch mean(β)
+        β_std_hist[epoch] = β_std/trainsamples # get average batch std(β)
         # Report on train and test
         train_loss, train_acc = loss_and_accuracy(train_loader, Net)
         test_loss, test_acc = loss_and_accuracy(test_loader, Net)
+        #plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersResurection/epoch$(epoch).png")
         t2 = time()
         println("Epoch=$epoch")
         println("  train_loss = $train_loss, train_accuracy = $train_acc")
         println("  test_loss = $test_loss, test_accuracy = $test_acc")
-        println("  β_av = $β_av, β_std = $β_std")
+        println("  β_av = $(β_av_hist[epoch]), β_std = $(β_std_hist[epoch])")
         println("  Runtime: $(t2-t1)")
+
     end
-    return Net
+
+
+    return Net, β_av_hist, β_std_hist
 end
 
 # Set datatype
 dType = Float32
 
 # Make network(s)
-nNeurons = [784, 64, 64, 10]
+nNeurons = [784, 32, 32, 10]
 nLayers = length(nNeurons) - 1
 activation = [relu, relu, identity]
 dummyArray = [Dense(nNeurons[i], nNeurons[i+1], activation[i]) for i=1:nLayers] #Array of the Dense layers
 Net0 = Chain(dummyArray...) # Splat the layers and Chain them
-params(Net0)[1][:,:] .-= 0.03#-= 0.04*abs.(randn(64, 784))
+params(Net0)[1][:,:] .-= 0.025# .-= 0.03 #-= 0.04*abs.(randn(64, 784))
+#params(Net0)[1][:,:] .*=-1*sign.(params(Net0)[1]) # :( )No learning with all negative weights
 #params(Net0)[2][:,:] -= 2.5*ones(Float32, nNeurons[2])
 Net_BP = deepcopy(Net0)
 Net_hybrid = deepcopy(Net0)
 
 # Hyper parameters
-nEpochs = 10
-batchsize = 16
+nEpochs = 5
+batchsize = 64
 ηAdam = 0.0001
 ηSGD = 0.5
 ## Optimizer
@@ -229,15 +231,15 @@ testsamples = 10000
 
 
 # Train hybrid network
-println("Training in hybrid-mode")
-Random.seed!(323)
-train_hybrid(Net_hybrid, batchsize, opt, nEpochs, trainsamples, testsamples)
+# println("Training in hybrid-mode")
+Random.seed!(33)
+Net_hybrid, β_av_hist, β_std_hist = train_hybrid(Net_hybrid, batchsize, opt, nEpochs, trainsamples, testsamples)
 println("\nTraining finished!\n")
 
 # Train BP network
-println("Training in pure BP-mode")
-Random.seed!(323)
-train_BP(Net_BP, batchsize, opt, nEpochs, trainsamples, testsamples)
+# println("Training in pure BP-mode")
+# Random.seed!(33)
+# train_BP(Net_BP, batchsize, opt, nEpochs, trainsamples, testsamples)
 
 
 
@@ -274,9 +276,9 @@ Tasks:
 2.8. Make Hybrid lifted/BP training implementation ✓
 
 3. Advanced Steps
-3.1. make function for finding β per batch ✓ (not really useful)
-3.2. make function for finding β per datapoint
-3.3. Find good choice of β
+3.1. make function for finding β per batch ✓ (not really useful) ✓
+3.2. make function for finding β per neuron per datapoint ✓
+3.3. Find good choice of β ✓
 One β per batch or one β per datapoint?... No! one beta per neuron per datapoint!
 ... Here β should be varied to recover gradients even for dead units
 ... and the first layer should be changed to a prototype layer.

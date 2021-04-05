@@ -1,3 +1,5 @@
+dType = Float32
+
 mutable struct Net_CHL
     nNeurons::Array{Int32, 1}
 	  nLayers::Int32

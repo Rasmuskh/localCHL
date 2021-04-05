@@ -1,3 +1,11 @@
+module LPOM
+using FileIO; # Save and load network dictionaries
+using Printf # For formatting numeric output
+using Random; Random.seed!(32); rng = MersenneTwister(13)
+using LinearAlgebra
+include("utilityFunctions.jl")
+dType = Float32
+
 function get_loss(Net, w1x_plus_b1, z, activation)
     #TODO: Avoid unnecesary allocations by using inplace operations.
     # Preallocated dummy variables a and b might also be useful
@@ -338,4 +346,6 @@ function train_LPOM_threads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBa
 		    FileIO.save("$outpath", "Net", Net)
 	  end
     return
+end
+
 end

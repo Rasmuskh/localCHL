@@ -1,19 +1,21 @@
 using BenchmarkTools
-using LinearAlgebra
+
 using Statistics
-using Printf # For formatting numeric output
-using Random; Random.seed!(32); rng = MersenneTwister(13)
+using LinearAlgebra
+
 using JLD2; # Save and load network dictionaries
 using FileIO; # Save and load network dictionaries
 using Flux
+include("LPOM.jl")
+import .LPOM
 # Choose datatype
 dType = Float32
 
 # import stuff
-include("utilityFunctions.jl")
+#include("utilityFunctions.jl")
 include("LoadData.jl")
-include("LPOM.jl")
-include("LPOM_BLAS_Batches.jl")
+
+#include("LPOM_BLAS_Batches.jl")
 include("flux_mlp.jl")
 
 function main()
@@ -24,14 +26,14 @@ function main()
     # println(nT)
 
     # Define model architecture
-    nNeurons = [784, 64, 64, 10]
+    nNeurons = [784, 500, 500, 500, 10]
     HS(z) = Clamp(z, 0, 1.0)
-    activation = [relu, relu, relu, relu]
+    activation = [relu, relu, relu, identity]
     highLim = [Inf, Inf, Inf, Inf] # Upper clamping limit: ReLU: Inf, HardSigmoid: 1
     #activation = [HS, HS, HS]
     #highLim = [1.0, 1.0, 1.0]
     init_mode =  "glorot_uniform" # Options are: "glorot_uniform" and "glorot_normal" 
-    Net0 = init_network(nNeurons, highLim, init_mode)
+    Net0 = LPOM.init_network(nNeurons, highLim, init_mode)
     # Load a saved model
     # Net = load("networks/MNIST.jld2")["Net"] #Load old network
 
@@ -44,9 +46,10 @@ function main()
     # Hyper parameters
     nOuterIterations = 2
     nInnerIterations = 5# for CIFAR 10-15 iterations seems to be needed
-    nEpochs = 20
+    nEpochs = 5
     batchsize = 64
-    η = 0.5#
+    η = 0.5
+    #
     testBatchsize = min(10000, testSamples)
 
     # Where to save the trained model
@@ -56,7 +59,7 @@ function main()
     NetLPOM = deepcopy(Net0)
     for epoch=1:1
         println("\nEpoch: $epoch")
-        @time train_LPOM_threads(NetLPOM, xTrain, yTrain, xTest, yTest,
+        @time LPOM.train_LPOM_threads(NetLPOM, xTrain, yTrain, xTest, yTest,
                                  batchsize, testBatchsize, nEpochs, η,
                                  nOuterIterations, nInnerIterations, activation, outpath)
     end

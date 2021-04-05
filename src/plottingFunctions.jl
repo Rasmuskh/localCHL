@@ -1,10 +1,10 @@
 using Plots; # For plotting
-plotly()
+pyplot()
 
-function plot_filters(W1, nNeurons, nRows, nCols, width, height, imwidth, imheight)
+function plot_filters(W1, nRows, nCols, width, height, imwidth, imheight, outpath)
     p = []
 
-    W=[reshape(W1[i,:], (imwidth, imheight)) for i=1:nNeurons[2]]
+    W=[reshape(W1[i,:], (imwidth, imheight)) for i=1:size(W1)[1]]
     if nCols*nRows>length(W)
         for i=length(W)+1:nCols*nRows
             push!(W, zeros(size(W[1])))
@@ -18,7 +18,8 @@ function plot_filters(W1, nNeurons, nRows, nCols, width, height, imwidth, imheig
 
     P = plot(p..., legend = false, layout = (nCols,nRows), xticks=false, yticks=false, colorbar=false)
     P = plot!(size=(width,height))
-    display(P)
+    #display(P)
+    savefig(outpath)
 end
 
 function plot_filters_struct(Net, nRows, nCols, width, height, imwidth, imheight)
