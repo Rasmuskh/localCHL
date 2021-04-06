@@ -148,11 +148,12 @@ function run_LPOM_inference(x, w1x_plus_b1, z, denoms, Net, nOuterIterations, nI
 end
 
 function compute_denoms(denoms, Net)
-    @inbounds for (layer, w) in enumerate(Net.w[2:end])#use view?
+    @inbounds for (layer, w) in enumerate(Net.w[2:end])
         @inbounds for i=1:Net.nNeurons[layer+1]
             denoms[layer][i] = 1/(1 + BLAS.dot(view(w, :, i), view(w, :, i)))
         end
     end
+    # denoms = [[1/(1+BLAS.dot(wcol, wcol)) for wcol in eachcol(w)] for w in Net.w[2:end]]
     return denoms
 end
 

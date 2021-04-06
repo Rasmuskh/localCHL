@@ -26,7 +26,7 @@ function main()
     # println(nT)
 
     # Define model architecture
-    nNeurons = [784, 500, 500, 500, 10]
+    nNeurons = [784, 128, 128, 128, 10]
     HS(z) = Clamp(z, 0, 1.0)
     activation = [relu, relu, relu, identity]
     highLim = [Inf, Inf, Inf, Inf] # Upper clamping limit: ReLU: Inf, HardSigmoid: 1

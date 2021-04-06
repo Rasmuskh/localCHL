@@ -8,6 +8,8 @@ using LinearAlgebra
 using Statistics
 using Random; Random.seed!(3323); rng = MersenneTwister(12333)
 include("plottingFunctions.jl")
+#include("LoadData.jl")
+#include("utilityFunctions.jl")
 
 function getdata(batchsize, trainsamples, testsamples)
 
@@ -64,7 +66,7 @@ function train_BP(Net, batchsize, opt, nEpochs, trainsamples, testsamples)
         # Report on train and test
         train_loss, train_acc = loss_and_accuracy(train_loader, Net)
         test_loss, test_acc = loss_and_accuracy(test_loader, Net)
-        #plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/epoch$(epoch).png")
+        plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/epoch$(epoch).png")
         t2 = time()
         println("Epoch=$epoch")
         println("  train_loss = $train_loss, train_accuracy = $train_acc")
@@ -109,7 +111,7 @@ function f(X, z1_free, ∇z1_free, W1, b1, activation)
     LinearAlgebra.BLAS.set_num_threads(1)
     Threads.@threads for i=1:batchsize # Loop over datapoints
         for n=1:length(b1) # Loop over neurons
-            β = 10.0;  β_best_Arr[i][n] = β
+            β = 1.0;  β_best_Arr[i][n] = β
             z1_hat_batch[i][n] = activation(a[i][n] - β*∇z1_free_batch[i][n])
             E1_hat = ((a[i][n] - z1_hat_batch[i][n])^2)
             E1_free = ((a[i][n] - z1_free_batch[i][n])^2)
@@ -117,7 +119,7 @@ function f(X, z1_free, ∇z1_free, W1, b1, activation)
             E1_hat_max = E1_hat
             #Choose β to maximize ΔE = E_hat - E_free
             #TODO: Optimize this section
-            for t=1:8
+            for t=1:10
                 β *= 2
                 z_dummy = activation(a[i][n] - β*∇z1_free_batch[i][n])
                 E1_hat = (a[i][n] - z1_hat_batch[i][n])^2
@@ -183,7 +185,7 @@ function train_hybrid(Net, batchsize, opt, nEpochs,  trainsamples, testsamples)
         # Report on train and test
         train_loss, train_acc = loss_and_accuracy(train_loader, Net)
         test_loss, test_acc = loss_and_accuracy(test_loader, Net)
-        #plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersResurection/epoch$(epoch).png")
+        plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersResurection/epoch$(epoch).png")
         t2 = time()
         println("Epoch=$epoch")
         println("  train_loss = $train_loss, train_accuracy = $train_acc")
@@ -201,21 +203,21 @@ end
 dType = Float32
 
 # Make network(s)
-nNeurons = [784, 32, 32, 10]
+nNeurons = [784, 64, 64, 10]
 nLayers = length(nNeurons) - 1
 activation = [relu, relu, identity]
 dummyArray = [Dense(nNeurons[i], nNeurons[i+1], activation[i]) for i=1:nLayers] #Array of the Dense layers
 Net0 = Chain(dummyArray...) # Splat the layers and Chain them
-params(Net0)[1][:,:] .-= 0.025# .-= 0.03 #-= 0.04*abs.(randn(64, 784))
+params(Net0)[1][:,:] .-= 0.03# .-= 0.03 #-= 0.04*abs.(randn(64, 784))
 #params(Net0)[1][:,:] .*=-1*sign.(params(Net0)[1]) # :( )No learning with all negative weights
 #params(Net0)[2][:,:] -= 2.5*ones(Float32, nNeurons[2])
 Net_BP = deepcopy(Net0)
 Net_hybrid = deepcopy(Net0)
 
 # Hyper parameters
-nEpochs = 5
-batchsize = 64
-ηAdam = 0.0001
+nEpochs = 20
+batchsize = 32
+ηAdam = 0.0005
 ηSGD = 0.5
 ## Optimizer
 #opt = Descent(ηSGD) #SGD
@@ -231,16 +233,16 @@ testsamples = 10000
 
 
 # Train hybrid network
-# println("Training in hybrid-mode")
+println("Training in hybrid-mode")
 Random.seed!(33)
 Net_hybrid, β_av_hist, β_std_hist = train_hybrid(Net_hybrid, batchsize, opt, nEpochs, trainsamples, testsamples)
 println("\nTraining finished!\n")
 
 # Train BP network
-# println("Training in pure BP-mode")
-# Random.seed!(33)
-# train_BP(Net_BP, batchsize, opt, nEpochs, trainsamples, testsamples)
-
+println("Training in pure BP-mode")
+Random.seed!(33)
+train_BP(Net_hybrid, batchsize, opt, nEpochs, trainsamples, testsamples)
+println("\nTraining finished!\n")
 
 
 
