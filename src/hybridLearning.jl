@@ -8,8 +8,8 @@ using LinearAlgebra
 using Statistics
 using Random; Random.seed!(3323); rng = MersenneTwister(12333)
 include("plottingFunctions.jl")
-#include("LoadData.jl")
-#include("utilityFunctions.jl")
+include("proto_layers.jl")
+include("LoadData.jl")
 
 function getdata(batchsize, trainsamples, testsamples)
 
@@ -66,7 +66,7 @@ function train_BP(Net, batchsize, opt, nEpochs, trainsamples, testsamples)
         # Report on train and test
         train_loss, train_acc = loss_and_accuracy(train_loader, Net)
         test_loss, test_acc = loss_and_accuracy(test_loader, Net)
-        plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/epoch$(epoch).png")
+        #plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/epoch$(epoch).png")
         t2 = time()
         println("Epoch=$epoch")
         println("  train_loss = $train_loss, train_accuracy = $train_acc")
@@ -93,7 +93,7 @@ function get_∇θ1(x, z1_hat, z1_free, W0, b0, β, batchsize)
     return (∇b1, ∇W1)
 end
 
-function f(X, z1_free, ∇z1_free, W1, b1, activation)
+function  hybrid_grad(X, z1_free, ∇z1_free, W1, b1, activation)
     #TODO: Reduce number of allocations
     batchsize = (size(X)[2])
     A = W1*X .+ b1
@@ -122,6 +122,7 @@ function f(X, z1_free, ∇z1_free, W1, b1, activation)
             for t=1:10
                 β *= 2
                 z_dummy = activation(a[i][n] - β*∇z1_free_batch[i][n])
+                #TODO: Is this an error! shouldn't it be E1_hat = (a[i][n] - zdummy)^2
                 E1_hat = (a[i][n] - z1_hat_batch[i][n])^2
                 ΔE = (E1_hat - E1_free)/β
                 if ΔE>=ΔE_max
@@ -151,7 +152,6 @@ function f(X, z1_free, ∇z1_free, W1, b1, activation)
     return (∇b1, ∇W1, β_av, β_std)
 end
 
-
 function train_hybrid(Net, batchsize, opt, nEpochs,  trainsamples, testsamples)
 
     train_loader, test_loader = getdata(batchsize, trainsamples, testsamples)
@@ -172,7 +172,7 @@ function train_hybrid(Net, batchsize, opt, nEpochs,  trainsamples, testsamples)
 
             grad = gradient(() -> mse(Net[2:end](z1_free), y), params([z1_free]))
             ∇z1_free = grad[z1_free]
-            ∇b1, ∇W1, β_av_batch, β_std_batch = f(x, z1_free, ∇z1_free, θ[1], θ[2], activation)
+            ∇b1, ∇W1, β_av_batch, β_std_batch = hybrid_grad(x, z1_free, ∇z1_free, θ[1], θ[2], activation)
             β_av += β_av_batch
             β_std += β_std_batch
 
@@ -185,7 +185,7 @@ function train_hybrid(Net, batchsize, opt, nEpochs,  trainsamples, testsamples)
         # Report on train and test
         train_loss, train_acc = loss_and_accuracy(train_loader, Net)
         test_loss, test_acc = loss_and_accuracy(test_loader, Net)
-        plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersResurection/epoch$(epoch).png")
+        #plot_filters(params(Net[1])[1], 8, 8, 800, 800, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersResurection/epoch$(epoch).png")
         t2 = time()
         println("Epoch=$epoch")
         println("  train_loss = $train_loss, train_accuracy = $train_acc")
@@ -199,13 +199,16 @@ function train_hybrid(Net, batchsize, opt, nEpochs,  trainsamples, testsamples)
     return Net, β_av_hist, β_std_hist
 end
 
+# dataset = "MNIST"
+# (xTrain, yTrain, xTest, yTest) = loadData(dataset, 5000, 5000)
+
 # Set datatype
 dType = Float32
 
 # Make network(s)
-nNeurons = [784, 64, 64, 10]
+nNeurons = [784, 128, 128, 128, 10]
 nLayers = length(nNeurons) - 1
-activation = [relu, relu, identity]
+activation = [relu, relu, relu, identity]
 dummyArray = [Dense(nNeurons[i], nNeurons[i+1], activation[i]) for i=1:nLayers] #Array of the Dense layers
 Net0 = Chain(dummyArray...) # Splat the layers and Chain them
 params(Net0)[1][:,:] .-= 0.03# .-= 0.03 #-= 0.04*abs.(randn(64, 784))
@@ -215,8 +218,8 @@ Net_BP = deepcopy(Net0)
 Net_hybrid = deepcopy(Net0)
 
 # Hyper parameters
-nEpochs = 20
-batchsize = 32
+nEpochs = 3
+batchsize = 64
 ηAdam = 0.0005
 ηSGD = 0.5
 ## Optimizer
@@ -241,7 +244,7 @@ println("\nTraining finished!\n")
 # Train BP network
 println("Training in pure BP-mode")
 Random.seed!(33)
-train_BP(Net_hybrid, batchsize, opt, nEpochs, trainsamples, testsamples)
+train_BP(Net_BP, batchsize, opt, nEpochs, trainsamples, testsamples)
 println("\nTraining finished!\n")
 
 
@@ -259,7 +262,11 @@ println("\nTraining finished!\n")
 # ∇z1_free = grad[z1_free]
 
 #=
-Tasks:
+Proto layer tasks:
+1.1 Make basic FF-proto layer: Underway, broadcasting issues when batchsize is not 1. 
+1.2 Get Kmeans initialization working ✓
+
+Dense layer tasks:
 1. Initial Steps ✓
 1.1. Make NN ✓
 1.2. Make predict function ✓
@@ -281,8 +288,4 @@ Tasks:
 3.1. make function for finding β per batch ✓ (not really useful) ✓
 3.2. make function for finding β per neuron per datapoint ✓
 3.3. Find good choice of β ✓
-One β per batch or one β per datapoint?... No! one beta per neuron per datapoint!
-... Here β should be varied to recover gradients even for dead units
-... and the first layer should be changed to a prototype layer.
-... Prototype units
 =#
