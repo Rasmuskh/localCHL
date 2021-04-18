@@ -46,7 +46,7 @@ function main()
     # Hyper parameters
     nOuterIterations = 2
     nInnerIterations = 5# for CIFAR 10-15 iterations seems to be needed
-    nEpochs = 5
+    nEpochs = 3
     batchsize = 64
     η = 0.5
     #
@@ -57,10 +57,10 @@ function main()
 
     # Training loopn
     NetLPOM = deepcopy(Net0)
-    for epoch=1:1
+    for epoch=1:nEpochs
         println("\nEpoch: $epoch")
         @time LPOM.train_LPOM_threads(NetLPOM, xTrain, yTrain, xTest, yTest,
-                                 batchsize, testBatchsize, nEpochs, η,
+                                 batchsize, testBatchsize, 1, η,
                                  nOuterIterations, nInnerIterations, activation, outpath)
     end
 
