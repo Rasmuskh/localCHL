@@ -251,6 +251,8 @@ function train_LPOM_threads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBa
 	  #Allocate arrays to save training metrics to
     correctArray = zeros(Int32, batchsize)
 	  J_batch = zeros(dType, batchsize)
+    #=TODO: get rid of batch arrays. Use eachcol(Z) instead and compute ∇w directly from Z!
+    should be faster! :) =#
 	  z_batch = [[zeros(dType, N) for N in nNeurons[2:end]] for i=1:batchsize]
 	  ∇w_batch = [[zeros(dType, (nNeurons[n+1], nNeurons[n])) for n = 1:Net.nLayers] for i=1:batchsize]
 	  ∇b_batch = [[zeros(dType, (nNeurons[n+1])) for n = 1:Net.nLayers] for i=1:batchsize]
