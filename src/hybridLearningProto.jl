@@ -6,7 +6,7 @@ using Flux.Losses: mse
 using MLDatasets
 using LinearAlgebra
 using Statistics
-using Random; Random.seed!(3323); rng = MersenneTwister(12333)
+using Random; Random.seed!(33923); rng = MersenneTwister(122333)
 using OhMyREPL
 using FileIO
 include("plottingFunctions.jl")
@@ -16,10 +16,14 @@ include("LoadData.jl")
 function getdata(batchsize, trainsamples, testsamples)
 
     # Loading Dataset	
-    xtrain, ytrain = MLDatasets.MNIST.traindata(Float32)
-    xtrain = xtrain[:,:,1:trainsamples]; ytrain = ytrain[1:trainsamples]
-    xtest, ytest = MLDatasets.MNIST.testdata(Float32)
-    xtest = xtest[:,:,1:testsamples]; ytest = ytest[1:testsamples]
+    # xtrain, ytrain = MLDatasets.MNIST.traindata(Float32)
+    # xtrain = xtrain[:,:,1:trainsamples]; ytrain = ytrain[1:trainsamples]
+    # xtest, ytest = MLDatasets.MNIST.testdata(Float32)
+    # xtest = xtest[:,:,1:testsamples]; ytest = ytest[1:testsamples]
+    xtrain, ytrain = MLDatasets.CIFAR10.traindata(Float32)
+    #xtrain = xtrain[:,:,1:trainsamples]; ytrain = ytrain[1:trainsamples]
+    xtest, ytest = MLDatasets.CIFAR10.testdata(Float32)
+    #xtest = xtest[:,:,1:testsamples]; ytest = ytest[1:testsamples]
 
     # Reshape Data in order to flatten each image into a linear array
     xtrain = Flux.flatten(xtrain)
@@ -80,9 +84,9 @@ function train_BP(Net, batchsize, opt, nEpochs, trainsamples, testsamples)
         # Report on train and test
         train_loss, train_acc = loss_and_accuracy(train_loader, Net)
         test_loss, test_acc = loss_and_accuracy(test_loader, Net)
-        if epoch%10==0
-            plot_filters(Flux.params(Net[1])[1]', 16, 16, 1600, 1600, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/epoch$(epoch).png")
-        end
+        #if epoch%10==0
+        #    plot_filters(Flux.params(Net[1])[1]', 16, 16, 1600, 1600, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/epoch$(epoch).png")
+        #end
         t2 = time()
         println("Epoch=$epoch")
         println("  train_loss = $train_loss, train_accuracy = $train_acc")
@@ -235,15 +239,13 @@ end
 dType = Float32
 
 # Make network(s)
-nNeurons = [784, 256, 256, 256, 10]
+nNeurons = [3072, 256, 256, 10]
 nLayers = length(nNeurons) - 1
-activation = [relu, relu, relu, identity]
+activation = [relu, relu, identity]
 
 Net0 = Chain(rbfStep(nNeurons[1], nNeurons[2]),
              Dense(nNeurons[2], nNeurons[3], activation[2]),
-             Dense(nNeurons[3], nNeurons[4], activation[3]),
-             Dense(nNeurons[4], nNeurons[5], activation[4]))
-
+             Dense(nNeurons[3], nNeurons[4], activation[3]))
 # Switch to adversarial initial weights
 #Flux.params(Net0)[1][:,:] .-= 0.03# .-= 0.03 #-= 0.04*abs.(randn(64, 784))
 #Flux.params(Net0)[1][:,:] .*=-1*sign.(params(Net0)[1]) # :( No learning with all negative weights!
@@ -253,9 +255,9 @@ Net_BP = deepcopy(Net0)
 Net_hybrid = deepcopy(Net0)
 
 # Hyper parameters
-nEpochs = 300
+nEpochs = 200
 batchsize = 64
-λ = 10^(-6)
+λ = 0#0^(-6)
 ηAdam = 0.001
 ηSGD = 0.1
 # Optimizer
@@ -264,7 +266,7 @@ opt = ADAM(ηAdam)
 #opt = Descent(ηSGD)
 
 # Data
-trainsamples = 60000
+trainsamples = 50000
 testsamples = 10000
 
 #LinearAlgebra.BLAS.set_num_threads(8)
@@ -274,7 +276,7 @@ testsamples = 10000
 #------Train networks------
 # Train hybrid network
 # println("Training in hybrid-mode")
-# Random.seed!(33)
+# Random.seed!(343)
 # ps = Flux.params(Net_hybrid)
 # @time k_means!(ps, 20)
 # @time Net_hybrid, β_av_hist, β_std_hist = train_hybrid(Net_hybrid, batchsize, opt, nEpochs, trainsamples, testsamples)
@@ -282,11 +284,11 @@ testsamples = 10000
 
 # Train BP network
 println("Training in pure BP-mode")
-Random.seed!(33)
+Random.seed!(343)
 ps = Flux.params(Net_BP)
-plot_filters(Flux.params(Net_BP[1])[1]', 16, 16, 1600, 1600, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/Epoch0.png")
-@time k_means!(ps, 20);
-plot_filters(Flux.params(Net_BP[1])[1]', 16, 16, 1600, 1600, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/Epoch0_post_kmeans.png")
+#plot_filters(Flux.params(Net_BP[1])[1]', 16, 16, 1600, 1600, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/Epoch0.png")
+#@time k_means!(ps, 20);
+#plot_filters(Flux.params(Net_BP[1])[1]', 16, 16, 1600, 1600, 28, 28, "/home/rasmus/Documents/localCHL/output/resurectionNet/FiltersBP/Epoch0_post_kmeans.png")
 @time train_BP(Net_BP, batchsize, opt, nEpochs, trainsamples, testsamples)
 println("\nTraining finished!\n")
 

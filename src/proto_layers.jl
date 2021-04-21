@@ -51,7 +51,7 @@ Kmeans initialization of first layer weights.
 #TODO: rewrite and optimize this function.
 """
 function k_means!(ps, numIter)
-    xTrain, yTrain, xTest, yTest = loadData("MNIST", 60000, 0)
+    xTrain, yTrain, xTest, yTest = loadData("MNIST", 6000, 0)
     init_template!(ps)
     dist = [zeros(Float32, length(ps[2])) for k=1:length(xTrain)]
     labels = zeros(Int16, length(xTrain))
@@ -181,23 +181,6 @@ function rbf(in::Integer, out::Integer;
     return rbf(V, β)
 end
 
-# Flux.@functor rbf
-# function (a::rbf)(x::AbstractArray)
-
-#     batchsize = size(x)[2]
-#     numIn = size(x)[1] 
-#     numOut = size(a.V)[2] # number of units in the RBF layer
-
-#     #= a.V and x are matrices, with the same number of rows, but different numbers of columns.
-#     Each column of x represents a different datapoint, and each column of V is a template/centroid.
-#     I For each datapoint I want the squared Euclidean distance to each of the columns of V. =#
-#     d = a.V.-reshape(x, (numIn, 1, batchsize))
-#     d = (sum(abs2, d, dims=1))
-#     # Here size(d) = (1, numOut, batchsize) so next the singleton dimension is dropped
-#     d = reshape(d, (numOut, batchsize))
-#     return exp.(-a.β.*d)
-# end
-
 Flux.@functor rbf
 function (a::rbf)(x::AbstractArray)
 
@@ -207,6 +190,33 @@ function (a::rbf)(x::AbstractArray)
     V, β = a.V, a.β
     @tullio d[num_out, batch_size] := abs2(V[num_in, num_out] - x[num_in, batch_size])
     return exp.(-a.β.*d)
+end
+
+#RBF2
+struct rbf2{S<:AbstractArray, T<:AbstractArray}
+    V::S
+    β::T
+end
+
+function rbf2(in::Integer, out::Integer;
+             initV = Flux.glorot_uniform, β0 = 1.0f0)
+    V = initV(out, in)
+    β = β0*ones(Float32, out)
+    return rbf2(V, β)
+end
+
+Flux.@functor rbf2
+function (a::rbf2)(x::AbstractArray)
+
+    batchsize = size(x)[2]
+    numIn = size(x)[1] 
+    numOut = size(a.V)[2] # number of units in the RBF layer
+    V, β = a.V, a.β
+    #@tullio d[num_out, batch_size] := abs2(V[num_in, num_out] - x[num_in, batch_size])
+    x2 = sum(abs2, x, dims=1)
+    V2 = sum(abs2, V, dims=2)
+    d2 = -2*V*x .+ V2 .+ x2
+    return exp.(-a.β.*d2)
 end
 
 # ---Step radial basis function layer---
@@ -222,7 +232,8 @@ end
 
 function rbfStep(in::Integer, out::Integer;
                  initV = Flux.glorot_uniform, β0=1.0f0, μ0=1.0f0)
-    V = initV(in, out)
+    # V = initV(in, out)
+    V = initV(out, in)
     β = β0*ones(Float32, out)
     μ = μ0*ones(Float32, out)
     return rbfStep(V, β, μ)
@@ -235,12 +246,11 @@ function (a::rbfStep)(x::AbstractArray)
     numIn = size(x)[1]
     numOut = size(a.V)[2]
 
-    # TODO: Old approach. Remove in the future.
-    # d = reshape(sqrt.(sum(abs2, a.V.-reshape(x, (numIn, 1, batchsize)), dims=1)), (numOut, batchsize))
-    # z = Zigmoid.(a.β.*(d.-a.μ))
-
     V, β, μ = a.V, a.β, a.μ
-    @tullio d[num_out, batch_size] := abs2(V[num_in, num_out] - x[num_in, batch_size])
+    # @tullio d[num_out, batch_size] := abs2(V[num_in, num_out] - x[num_in, batch_size])
+    x2 = sum(abs2, x, dims=1)
+    V2 = sum(abs2, V, dims=2)
+    d = -2*V*x .+ V2 .+ x2
     z = σ.(-β.*(sqrt.(d).-μ))
     return z
 end

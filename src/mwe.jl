@@ -13,7 +13,8 @@ end
 
 function rbf(in::Integer, out::Integer;
              initV = Flux.glorot_uniform, β0 = 1.0f0)
-    V = initV(in, out)
+    #V = initV(in, out)
+    V = initV(out, in)
     β = β0*ones(Float32, out)
     return rbf(V, β)
 end
@@ -24,20 +25,15 @@ function (a::rbf)(x::AbstractArray)
     batchsize = size(x)[2]
     numIn = size(x)[1] 
     numOut = size(a.V)[2] # number of units in the RBF layer
-
-    #= a.V and x are matrices, with the same number of rows, but different numbers of columns.
-    Each column of x represents a different datapoint, and each column of V is a template/centroid.
-    For each datapoint we compute the squared Euclidean distance to each of the columns of V. =#
-    #d = a.V.-reshape(x, (numIn, 1, batchsize))
-    #d = (sum(abs2, d, dims=1))
     V, β = a.V, a.β
-    @tullio d[num_out, batch_size] := abs2(V[num_in, num_out] - x[num_in, batch_size])
-    # Here size(d) = (1, numOut, batchsize) so next the singleton dimension is dropped
-    # d = reshape(d, (numOut, batchsize))
+
+    x2 = sum(abs2, x, dims=1)
+    V2 = sum(abs2, V, dims=2)
+    d = -2*V*x .+ V2 .+ x2
     return exp.(-a.β.*d)
 end
 
-LinearAlgebra.BLAS.set_num_threads(8)
+LinearAlgebra.BLAS.set_num_threads(16)
 #nT = ccall((:openblas_get_num_threads64_, Base.libblas_name), Cint, ())
 #println(nT)
 
