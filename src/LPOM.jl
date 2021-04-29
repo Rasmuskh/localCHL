@@ -350,63 +350,139 @@ function train_LPOM_threads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBa
     return
 end
 
-function getdata(batchsize, trainsamples, testsamples)
+function get_∇_V2!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
+    # First layer
+    ∇bDummy[1] = (activation[1].(Net.w[1]*X .+ Net.b[1]) - Z[1])/batchsize
+    ∇w[1] = ∇bDummy[1]*X'
+    ∇b[1] = reshape(sum(∇bDummy[1], dims=2), size(∇b[1]))#/batchsize # reshaping to drop singleton dimension
+    # Subsequent layers
+    for i=2:Net.nLayers
+        ∇bDummy[i] = (activation[i].(Net.w[i]*Z[i-1] .+ Net.b[i]) - Z[i])/batchsize
+        ∇w[i] = ∇bDummy[i]*Z[i-1]'
+        ∇b[i] = reshape(sum(∇bDummy[i], dims=2), size(∇b[i]))#/batchsize
+    end
+end
 
-    # Loading Dataset	
-    xtrain, ytrain = MLDatasets.MNIST.traindata(Float32)
-    xtrain = xtrain[:,:,1:trainsamples]; ytrain = ytrain[1:trainsamples]
-    xtest, ytest = MLDatasets.MNIST.testdata(Float32)
-    xtest = xtest[:,:,1:testsamples]; ytest = ytest[1:testsamples]
-    xtrain = xtrain[:,:,1:trainsamples]; ytrain = ytrain[1:trainsamples]
-    xtest = xtest[:,:,1:testsamples]; ytest = ytest[1:testsamples]
-
-    # Reshape Data in order to flatten each image into a linear array
-    xtrain = Flux.flatten(xtrain)
-    xtest = Flux.flatten(xtest)
-
-    # One-hot-encode the labels
-    ytrain, ytest = onehotbatch(ytrain, 0:9), onehotbatch(ytest, 0:9)
-
-    # Create DataLoaders (mini-batch iterators)
-    train_loader = DataLoader((xtrain, ytrain), batchsize=batchsize, shuffle=true)
-    test_loader = DataLoader((xtest, ytest), batchsize=batchsize)
-
-    return train_loader, test_loader
+function get_loss_V2(Net, X, Z, activation)
+    #TODO: Avoid unnecesary allocations by using inplace operations.
+    # Preallocated dummy variables a and b might also be useful
+    # First layer
+    a = Net.w[1]*X .+ Net.b[1]
+    b = a - Z[1]
+    J = 0.5*sum(abs2, b)
+    
+    b = a - activation[1].(a)
+    J -= 0.5*sum(abs2, b)
+    
+    # Subsequent layers
+    for i=2:Net.nLayers
+        a = Net.w[i]*Z[i-1] .+ Net.b[i]
+        b = a - Z[i]
+        J += 0.5*sum(abs2, b)
+        b = a - activation[i].(a)
+        J -= 0.5*sum(abs2,b)
+    end
+    return J
 end
 
 
+function train_LPOM_threads_V2(Net, xTrain, yTrain, xTest, yTest, batchsize, testBatchsize, nEpochs, η, nOuterIterations, nInnerIterations, activation, outpath)
+	  """Train an MLP. Training is parallel across datapoints."""
 
+	  L = Net.nLayers
+	  nNeurons = Net.nNeurons
 
-function train_LPOM_batch(Net, batchsize, nEpochs, trainsamples, testsamples, activation)
+	  nBatches = trunc(Int16, length(yTrain) / batchsize)
+	  nSamples = length(yTrain) - (length(yTrain)%batchsize)
+	  #Allocate arrays to save training metrics to
+    correctArray = zeros(Int32, batchsize)
+    #=TODO: get rid of batch arrays. Use eachcol(Z) instead and compute ∇w directly from Z!
+    should be faster! :) =#
+	  z_batch = [[zeros(dType, N) for N in nNeurons[2:end]] for i=1:batchsize]
+    ∇w = [zeros(dType, (nNeurons[n+1], nNeurons[n])) for n = 1:Net.nLayers]
+	  ∇b = [zeros(dType, (nNeurons[n+1])) for n = 1:Net.nLayers]
+    ∇bDummy = [zeros(dType, (nNeurons[n+1], batchsize)) for n = 1:Net.nLayers]
+    denoms = [zeros(dType, N) for N in Net.nNeurons[2:end-1]]
 
-    train_loader, test_loader = getdata(batchsize, trainsamples, testsamples)
-    θ = Flux.params(Net)
+	  #Loop across epochs
+	  for epoch = 1:nEpochs
+		    t=0
+		    t0 = time()
+		    #Shuffle data
+		    order = randperm(length(yTrain))
+		    xTrain = xTrain[order]
+		    yTrain = yTrain[order]
 
-    Z = [zeros(dType, (N, batchsize)) for N in Net.nNeurons[2:end]]
+		    # And a variable for counting batch number
+		    batchIndex::Int32 = 0
+		    correct::Int32 = 0
+		    J::dType = 0
 
-    # Loop through epochs
-    for epoch in 1:nEpochs
+		    # Loop through mini batches
+		    for i = 1:batchsize:nSamples
+			      batchIndex += 1
+			      start = i
+			      stop = start + batchsize - 1
+			      xBatch = @view xTrain[start:stop]
+			      yBatch = @view yTrain[start:stop]
 
-        t1 = time()
-
-        # Loop through batches
-        for (X, Y) in train_loader
-            zcols = [eachcol(zi) for zi in Z]
-            for (x, y, z) in zip(eachcol(X), eachcol(Y), zcols)
-                println("test")
-
+            #= precompute denominator
+            TODO: Check ifs list comprehension slower than explicit loops?
+            This piece of code might be critical when working on CIFAR10,
+            since W0 will be rather large. =#
+            #denoms = [[1/(1 + sum(abs2,view(w, :, i))) for i=1:Net.nNeurons[layer+1]] for (layer, w) in enumerate(Net.w[2:end])]
+            denoms = compute_denoms(denoms, Net)
+            LinearAlgebra.BLAS.set_num_threads(1)
+            Threads.@threads for n = 1:batchsize
                 # Precompute w1x+b1
-				        w1x_plus_b1 = Net.w[1]*x + Net.b[1]
+				        w1x_plus_b1 = Net.w[1]*xBatch[n] + Net.b[1]
 
                 # Get activations
-                z = forward(z, Net, activation, w1x_plus_b1);
-            end
+                forward!(z_batch[n], Net, activation, w1x_plus_b1);
+                correctArray[n] = ((argmax(z_batch[n][end])-1)==yBatch[n])
+							  z_batch[n][end] = [yBatch[n]+1==k for k=1:10]
+                z_batch[n] = run_LPOM_inference(xBatch[n], w1x_plus_b1, z_batch[n], denoms, Net, nOuterIterations, nInnerIterations, activation)
+			      end
 
-            t2 = time()
-            println("Epoch=$epoch")
-            println("  Runtime: $(t2-t1)")
-        end
-    end
+            LinearAlgebra.BLAS.set_num_threads(8)
+
+            X = reduce(hcat, xBatch)
+            Z = [reduce(hcat, [zi[k] for zi in z_batch]) for k=1:Net.nLayers]
+            get_∇_V2!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
+            J += get_loss_V2(Net, X, Z, activation)
+
+			      # Correct equals true if prediction is correct. Otherwise equals false.
+			      correct += sum(correctArray)
+
+			      Net.w -= η * ∇w
+			      Net.b -= η * ∇b
+
+			      #print("\r$(@sprintf("%.2f", 100*batchIndex/nBatches))% complete")
+
+		    end
+
+		    acc_train = 100*correct/nSamples
+		    Av_J = J/nSamples
+
+        # fb = Net.get_fb(Net)
+		    acc_test, z1_saturated_up, z1_saturated_down, z2_saturated_up, z2_saturated_down, z3_saturated_up, z3_saturated_down = predict(Net, xTest, yTest, testBatchsize, activation)
+		    push!(Net.History["acc_train"], acc_train)
+		    push!(Net.History["acc_test"], acc_test)
+		    push!(Net.History["J"], Av_J)
+        push!(Net.History["z1_sat_up"], z1_saturated_up)
+        push!(Net.History["z1_sat_down"], z1_saturated_down)
+        push!(Net.History["z2_sat_up"], z2_saturated_up)
+        push!(Net.History["z2_sat_down"], z2_saturated_down)
+        push!(Net.History["z3_sat_up"], z3_saturated_up)
+        push!(Net.History["z3_sat_down"], z3_saturated_down)
+
+		    t1 = time()
+		    println("\nav. metrics: \tJ: $(@sprintf("%.8f", Av_J))\tacc_train: $(@sprintf("%.2f", acc_train))%\tacc_test: $(@sprintf("%.2f", acc_test))% \tProc. time: $(@sprintf("%.2f", t1-t0))\n")
+
+		    push!(Net.History["runTimes"], t1-t0)
+		    FileIO.save("$outpath", "Net", Net)
+	  end
+    return
 end
 
 

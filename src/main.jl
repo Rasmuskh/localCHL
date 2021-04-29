@@ -26,10 +26,10 @@ function main()
     # println(nT)
 
     # Define model architecture
-    nNeurons = [784, 64, 64, 10]
+    nNeurons = [784, 128, 128, 128, 10]
     HS(z) = Clamp(z, 0, 1.0)
-    activation = [relu, relu, identity]
-    highLim = [Inf, Inf, Inf] # Upper clamping limit: ReLU: Inf, HardSigmoid: 1
+    activation = [relu, relu, relu, identity]
+    highLim = [Inf, Inf, Inf, Inf] # Upper clamping limit: ReLU: Inf, HardSigmoid: 1
     #activation = [HS, HS, HS]
     #highLim = [1.0, 1.0, 1.0]
     init_mode =  "glorot_uniform" # Options are: "glorot_uniform" and "glorot_normal" 
@@ -39,8 +39,8 @@ function main()
 
     # Load dataset
     dataset = "MNIST"
-    trainSamples = 600
-    testSamples = 100
+    trainSamples = 60000
+    testSamples = 10000
     xTrain, yTrain, xTest, yTest = loadData(dataset, trainSamples, testSamples)
 
     # Hyper parameters
@@ -59,10 +59,9 @@ function main()
     NetLPOM = deepcopy(Net0)
     for epoch=1:nEpochs
         println("\nEpoch: $epoch")
-        # @time train_LPOM_batch(NetLPOM, xTrain, yTrain, xTest, yTest,
-        #                          batchsize, testBatchsize, 1, η,
-        #                        nOuterIterations, nInnerIterations, activation, outpath)
-        @time train_LPOM_batch(NetLPOM, batchsize, 1, trainSamples, testSamples, activation)
+        @time train_LPOM_threads_V2(NetLPOM, xTrain, yTrain, xTest, yTest,
+                               batchsize, testBatchsize, 1, η,
+                               nOuterIterations, nInnerIterations, activation, outpath)
     end
     #BP trained MLP
     # use_CUDA = false
