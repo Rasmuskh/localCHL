@@ -8,6 +8,7 @@ function run_BCD_LPOM!(nInnerIterations, z, y,
                        W0, W1, b0, b1,
                        a, b, denoms, w1, c,
                        activation, high)
+
     c .= y .- b1 
     b .= W1'*(c)
 
@@ -38,7 +39,9 @@ function run_BCD_LPOM!(nInnerIterations, z, y,
     end
 end
 
-function run_LPOM_inference!(x, w1x_plus_b1, z, denoms, Net, nOuterIterations, nInnerIterations, activation)
+function run_LPOM_inference!(x, w1x_plus_b1, z, denoms, Net,
+                             nOuterIterations, nInnerIterations, activation)
+
     for i=1:nOuterIterations
         #= Iterate backwards through the layers. On the first iteration i=1 we start infering
         at layer nLayers-1. On subsequent iterations i>1 we start at nLayers-2 since the last
@@ -69,6 +72,7 @@ function run_LPOM_inference!(x, w1x_plus_b1, z, denoms, Net, nOuterIterations, n
 end
 
 function compute_denoms(denoms, Net)
+
     for (layer, w) in enumerate(Net.w[2:end])
         for i=1:Net.nNeurons[layer+1]
             denoms[layer][i] = 1/(1 + BLAS.dot(view(w, :, i), view(w, :, i)))
@@ -80,6 +84,7 @@ function compute_denoms(denoms, Net)
 end
 
 function get_∇!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
+
     # First layer
     ∇bDummy[1] = (activation[1].(Net.w[1]*X .+ Net.b[1]) - Z[1])/batchsize
     ∇w[1] = ∇bDummy[1]*X'
@@ -93,10 +98,7 @@ function get_∇!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
 end
 
 function get_loss(Net, W1X_plus_b1, X, Z, activation)
-    #TODO: Avoid unnecesary allocations by using inplace operations.
-    # Preallocated dummy variables a and b might also be useful
-    # First layer
-    # a = Net.w[1]*X .+ Net.b[1]
+
     b = W1X_plus_b1 - Z[1]
     J = 0.5*sum(abs2, b)
     
@@ -128,8 +130,9 @@ function loss_and_accuracy(dataloader, batchsize, Net, activation)
     return (100*acc/nsamples, J/nsamples)
 end
 
-function train_LPOM_threads(Net, xTrain, yTrain, xTest, yTest, batchsize, test_batchsize, nEpochs, η, nOuterIterations, nInnerIterations, activation, outpath, numThreads)
-	  """Train an MLP. Training is parallel across datapoints."""
+"""Train an MLP using local contrastive Hebbian learning."""
+function train_LPOM_threads(Net, batchsize, test_batchsize, nEpochs, η, nOuterIterations, nInnerIterations, activation, outpath, numThreads)
+
     LinearAlgebra.BLAS.set_num_threads(numThreads)
 
     Z = [zeros(Float32, N, batchsize) for N in Net.nNeurons[2:end]]

@@ -5,77 +5,41 @@ using LinearAlgebra
 
 using JLD2; # Save and load network dictionaries
 using FileIO; # Save and load network dictionaries
+using MLDatasets
 using Flux
 using Flux.Data: DataLoader
 using Flux: onehotbatch, onecold, @epochs
 include("LPOM.jl")
 include("utilityFunctions.jl")
-# Choose datatype
-dType = Float32
-
-# import stuff
-#include("utilityFunctions.jl")
-include("LoadData.jl")
-
-#include("LPOM_BLAS_Batches.jl")
-# include("flux_mlp.jl")
 
 function main()
-    # nT = ccall((:openblas_get_num_threads64_, Base.libblas_name), Cint, ())
-    # println(nT)
-    # LinearAlgebra.BLAS.set_num_threads(1)
-    # nT = ccall((:openblas_get_num_threads64_, Base.libblas_name), Cint, ())
-    # println(nT)
-
     # Define model architecture
-    nNeurons = [784, 128, 128, 128, 10]
+    nNeurons = [784, 50, 50, 50, 10]
     HS(z) = Clamp(z, 0, 1.0)
     activation = [relu, relu, relu, identity]
     highLim = [Inf, Inf, Inf, Inf] # Upper clamping limit: ReLU: Inf, HardSigmoid: 1
-    #activation = [HS, HS, HS]
-    #highLim = [1.0, 1.0, 1.0]
+
+    # Initialize network
     init_mode =  "glorot_uniform" # Options are: "glorot_uniform" and "glorot_normal" 
-    Net0 = init_network(nNeurons, highLim, init_mode)
+    Net = init_network(nNeurons, highLim, init_mode)
     # Load a saved model
     # Net = load("networks/MNIST.jld2")["Net"] #Load old network
-
-    # Load dataset
-    dataset = "MNIST"
-    trainSamples = 60000
-    testSamples = 10000
-    xTrain, yTrain, xTest, yTest = loadData(dataset, trainSamples, testSamples)
 
     # Hyper parameters
     nOuterIterations = 2
     nInnerIterations = 5# for CIFAR 10-15 iterations seems to be needed
     nEpochs = 3
     batchsize = 64
+    test_batchsize = 10000
     η = 0.5
-    #
-    testBatchsize = min(10000, testSamples)
 
-    # Where to save the trained model
-    outpath = "../networks/$(dataset).jld2"
-
+    # Train the network
+    outpath = "../networks/Network.jld2"
     numThreads = Threads.nthreads()
-
-    # Training loopn
-    NetLPOM = deepcopy(Net0)
-    # for epoch=1:nEpochs
-    #     println("\nEpoch: $epoch")
-    @time train_LPOM_threads_V2(NetLPOM, xTrain, yTrain, xTest, yTest,
-                                    batchsize, testBatchsize, nEpochs, η,
-                                    nOuterIterations, nInnerIterations, activation, outpath,
-                                    numThreads)
-    # end
-    #BP trained MLP
-    # use_CUDA = false
-    # NetFlux = LPOM_to_Flux(deepcopy(Net0), activation)
-    # NetFlux = train_flux(NetFlux, η, batchsize, nEpochs, use_CUDA)
-
-
-
-return NetLPOM
+    @time train_LPOM_threads(Net, batchsize, test_batchsize, nEpochs, η,
+                             nOuterIterations, nInnerIterations,
+                             activation, outpath, numThreads)
+return Net
 end
 
 Net = main();
