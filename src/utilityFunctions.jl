@@ -79,6 +79,20 @@ function Clamp(z, low=0.0, high=Inf)
 end
 
 """Simple feed-forward pass"""
+function forward(z, Net, activation, w1x_plus_b1)
+    z[1] = activation[1].(w1x_plus_b1)
+
+    @inbounds for i = 2:Net.nLayers-1
+        z[i] =  activation[i].(Net.w[i] * z[i-1] .+ Net.b[i])
+    end
+
+    #The final layer is linear
+    L = Net.nLayers
+    z[L] = activation[L].(Net.w[L] * z[L-1] .+ Net.b[L])
+    return z
+end
+
+"""Simple feed-forward pass"""
 function forward!(z, Net, activation, w1x_plus_b1)
     z[1] = activation[1].(w1x_plus_b1)
 

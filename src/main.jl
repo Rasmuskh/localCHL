@@ -7,7 +7,7 @@ using JLD2; # Save and load network dictionaries
 using FileIO; # Save and load network dictionaries
 using Flux
 include("LPOM.jl")
-import .LPOM
+include("utilityFunctions.jl")
 # Choose datatype
 dType = Float32
 
@@ -33,14 +33,14 @@ function main()
     #activation = [HS, HS, HS]
     #highLim = [1.0, 1.0, 1.0]
     init_mode =  "glorot_uniform" # Options are: "glorot_uniform" and "glorot_normal" 
-    Net0 = LPOM.init_network(nNeurons, highLim, init_mode)
+    Net0 = init_network(nNeurons, highLim, init_mode)
     # Load a saved model
     # Net = load("networks/MNIST.jld2")["Net"] #Load old network
 
     # Load dataset
     dataset = "MNIST"
-    trainSamples = 50000
-    testSamples = 10000
+    trainSamples = 600
+    testSamples = 100
     xTrain, yTrain, xTest, yTest = loadData(dataset, trainSamples, testSamples)
 
     # Hyper parameters
@@ -59,11 +59,11 @@ function main()
     NetLPOM = deepcopy(Net0)
     for epoch=1:nEpochs
         println("\nEpoch: $epoch")
-        @time LPOM.train_LPOM_threads(NetLPOM, xTrain, yTrain, xTest, yTest,
-                                 batchsize, testBatchsize, 1, η,
-                                 nOuterIterations, nInnerIterations, activation, outpath)
+        # @time train_LPOM_batch(NetLPOM, xTrain, yTrain, xTest, yTest,
+        #                          batchsize, testBatchsize, 1, η,
+        #                        nOuterIterations, nInnerIterations, activation, outpath)
+        @time train_LPOM_batch(NetLPOM, batchsize, 1, trainSamples, testSamples, activation)
     end
-
     #BP trained MLP
     # use_CUDA = false
     # NetFlux = LPOM_to_Flux(deepcopy(Net0), activation)

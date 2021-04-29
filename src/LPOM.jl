@@ -1,9 +1,8 @@
-module LPOM
 using FileIO; # Save and load network dictionaries
 using Printf # For formatting numeric output
 using Random; Random.seed!(32); rng = MersenneTwister(13)
 using LinearAlgebra
-include("utilityFunctions.jl")
+
 dType = Float32
 
 function get_loss(Net, w1x_plus_b1, z, activation)
@@ -351,4 +350,63 @@ function train_LPOM_threads(Net, xTrain, yTrain, xTest, yTest, batchsize, testBa
     return
 end
 
+function getdata(batchsize, trainsamples, testsamples)
+
+    # Loading Dataset	
+    xtrain, ytrain = MLDatasets.MNIST.traindata(Float32)
+    xtrain = xtrain[:,:,1:trainsamples]; ytrain = ytrain[1:trainsamples]
+    xtest, ytest = MLDatasets.MNIST.testdata(Float32)
+    xtest = xtest[:,:,1:testsamples]; ytest = ytest[1:testsamples]
+    xtrain = xtrain[:,:,1:trainsamples]; ytrain = ytrain[1:trainsamples]
+    xtest = xtest[:,:,1:testsamples]; ytest = ytest[1:testsamples]
+
+    # Reshape Data in order to flatten each image into a linear array
+    xtrain = Flux.flatten(xtrain)
+    xtest = Flux.flatten(xtest)
+
+    # One-hot-encode the labels
+    ytrain, ytest = onehotbatch(ytrain, 0:9), onehotbatch(ytest, 0:9)
+
+    # Create DataLoaders (mini-batch iterators)
+    train_loader = DataLoader((xtrain, ytrain), batchsize=batchsize, shuffle=true)
+    test_loader = DataLoader((xtest, ytest), batchsize=batchsize)
+
+    return train_loader, test_loader
 end
+
+
+
+
+function train_LPOM_batch(Net, batchsize, nEpochs, trainsamples, testsamples, activation)
+
+    train_loader, test_loader = getdata(batchsize, trainsamples, testsamples)
+    θ = Flux.params(Net)
+
+    Z = [zeros(dType, (N, batchsize)) for N in Net.nNeurons[2:end]]
+
+    # Loop through epochs
+    for epoch in 1:nEpochs
+
+        t1 = time()
+
+        # Loop through batches
+        for (X, Y) in train_loader
+            zcols = [eachcol(zi) for zi in Z]
+            for (x, y, z) in zip(eachcol(X), eachcol(Y), zcols)
+                println("test")
+
+                # Precompute w1x+b1
+				        w1x_plus_b1 = Net.w[1]*x + Net.b[1]
+
+                # Get activations
+                z = forward(z, Net, activation, w1x_plus_b1);
+            end
+
+            t2 = time()
+            println("Epoch=$epoch")
+            println("  Runtime: $(t2-t1)")
+        end
+    end
+end
+
+
