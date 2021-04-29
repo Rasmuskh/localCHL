@@ -79,7 +79,7 @@ function compute_denoms(denoms, Net)
     return denoms
 end
 
-function get_∇_V2!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
+function get_∇!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
     # First layer
     ∇bDummy[1] = (activation[1].(Net.w[1]*X .+ Net.b[1]) - Z[1])/batchsize
     ∇w[1] = ∇bDummy[1]*X'
@@ -92,7 +92,7 @@ function get_∇_V2!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
     end
 end
 
-function get_loss_V2(Net, W1X_plus_b1, X, Z, activation)
+function get_loss(Net, W1X_plus_b1, X, Z, activation)
     #TODO: Avoid unnecesary allocations by using inplace operations.
     # Preallocated dummy variables a and b might also be useful
     # First layer
@@ -123,12 +123,12 @@ function loss_and_accuracy(dataloader, batchsize, Net, activation)
         W1X_plus_b1 = Net.w[1]*X.+Net.b[1]
         forward!(Z, Net, activation, W1X_plus_b1)
         acc += sum(argmax.(eachcol(Z[end])).==argmax.(eachcol(Y)))
-        J += get_loss_V2(Net, W1X_plus_b1, X, Z, activation)
+        J += get_loss(Net, W1X_plus_b1, X, Z, activation)
     end
     return (100*acc/nsamples, J/nsamples)
 end
 
-function train_LPOM_threads_V2(Net, xTrain, yTrain, xTest, yTest, batchsize, test_batchsize, nEpochs, η, nOuterIterations, nInnerIterations, activation, outpath, numThreads)
+function train_LPOM_threads(Net, xTrain, yTrain, xTest, yTest, batchsize, test_batchsize, nEpochs, η, nOuterIterations, nInnerIterations, activation, outpath, numThreads)
 	  """Train an MLP. Training is parallel across datapoints."""
     LinearAlgebra.BLAS.set_num_threads(numThreads)
 
@@ -157,7 +157,7 @@ function train_LPOM_threads_V2(Net, xTrain, yTrain, xTest, yTest, batchsize, tes
             W1X_plus_b1 = Net.w[1]*X.+Net.b[1]
             denoms = compute_denoms(denoms, Net)
 
-            # FF predictions and clamping
+            # Make FF predictions and clamp output units
             forward!(Z, Net, activation, W1X_plus_b1)
             correct += sum(argmax.(eachcol(Z[end])).==argmax.(eachcol(Y)))
             Z[end] .= Y
@@ -170,13 +170,14 @@ function train_LPOM_threads_V2(Net, xTrain, yTrain, xTest, yTest, batchsize, tes
                 run_LPOM_inference!(view(X,:,n), view(W1X_plus_b1, :, n), zz, denoms,
                                     Net, nOuterIterations, nInnerIterations, activation)
 			      end
-            LinearAlgebra.BLAS.set_num_threads(numThreads) # Now BLAS should be multithreaded again
+            # Now BLAS should be multithreaded again
+            LinearAlgebra.BLAS.set_num_threads(numThreads) 
 
             # update number of correct predictions and the loss
-            J += get_loss_V2(Net, W1X_plus_b1, X, Z, activation)
+            J += get_loss(Net, W1X_plus_b1, X, Z, activation)
 
             # Compute the gradient and update the weights
-            get_∇_V2!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
+            get_∇!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
 			      Net.w -= η * ∇w
 			      Net.b -= η * ∇b
 
