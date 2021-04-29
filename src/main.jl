@@ -6,6 +6,8 @@ using LinearAlgebra
 using JLD2; # Save and load network dictionaries
 using FileIO; # Save and load network dictionaries
 using Flux
+using Flux.Data: DataLoader
+using Flux: onehotbatch, onecold, @epochs
 include("LPOM.jl")
 include("utilityFunctions.jl")
 # Choose datatype
@@ -16,12 +18,12 @@ dType = Float32
 include("LoadData.jl")
 
 #include("LPOM_BLAS_Batches.jl")
-include("flux_mlp.jl")
+# include("flux_mlp.jl")
 
 function main()
     # nT = ccall((:openblas_get_num_threads64_, Base.libblas_name), Cint, ())
     # println(nT)
-    LinearAlgebra.BLAS.set_num_threads(1)
+    # LinearAlgebra.BLAS.set_num_threads(1)
     # nT = ccall((:openblas_get_num_threads64_, Base.libblas_name), Cint, ())
     # println(nT)
 
@@ -55,14 +57,17 @@ function main()
     # Where to save the trained model
     outpath = "../networks/$(dataset).jld2"
 
+    numThreads = Threads.nthreads()
+
     # Training loopn
     NetLPOM = deepcopy(Net0)
-    for epoch=1:nEpochs
-        println("\nEpoch: $epoch")
-        @time train_LPOM_threads_V2(NetLPOM, xTrain, yTrain, xTest, yTest,
-                               batchsize, testBatchsize, 1, η,
-                               nOuterIterations, nInnerIterations, activation, outpath)
-    end
+    # for epoch=1:nEpochs
+    #     println("\nEpoch: $epoch")
+    @time train_LPOM_threads_V2(NetLPOM, xTrain, yTrain, xTest, yTest,
+                                    batchsize, testBatchsize, nEpochs, η,
+                                    nOuterIterations, nInnerIterations, activation, outpath,
+                                    numThreads)
+    # end
     #BP trained MLP
     # use_CUDA = false
     # NetFlux = LPOM_to_Flux(deepcopy(Net0), activation)
