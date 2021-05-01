@@ -26,7 +26,7 @@ function init_network(nNeurons, highLim, init_mode="glorot_normal")
 	      "runTimes" => Float32[],
 	      "acc_train" => Float32[],
 	      "acc_test" => Float32[],
-	      "J" => Float32[],
+	      "J_train" => Float32[],
     )
 
 	  # Network struct

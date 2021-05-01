@@ -1,7 +1,4 @@
-using FileIO; # Save and load network dictionaries
-using Printf # For formatting numeric output
-using Random; Random.seed!(32); rng = MersenneTwister(13)
-using LinearAlgebra
+
 
 """Perform coordinate descent in z."""
 function run_BCD_LPOM!(nInnerIterations, z, y,
@@ -40,73 +37,71 @@ function run_BCD_LPOM!(nInnerIterations, z, y,
 end
 
 function run_LPOM_inference!(x, w1x_plus_b1, z, denoms, Net,
-                             nOuterIterations, nInnerIterations, activation)
+                             nOuterIterations, nInnerIterations, activation, highLim, nLayers)
 
     for i=1:nOuterIterations
         #= Iterate backwards through the layers. On the first iteration i=1 we start infering
         at layer nLayers-1. On subsequent iterations i>1 we start at nLayers-2 since the last
         thing updated in the previous iteration was layer nLayers -1. =#
-        startLayer = Net.nLayers-1-(i>1) 
+        startLayer = nLayers-1-(i>1) 
         for k=startLayer:-1:2
             a = Net.w[k]*z[k-1] + Net.b[k]
             run_BCD_LPOM!(nInnerIterations, z[k], z[k+1],
                           Net.w[k], Net.w[k+1], Net.b[k], Net.b[k+1],
                           a, similar(z[k]), denoms[k], similar(z[k+1]), similar(z[k+1]),
-                          activation[k], Net.highLim[k])
+                          activation[k], highLim[k])
         end
         # First layer
         run_BCD_LPOM!(nInnerIterations, z[1], z[2],
                       Net.w[1], Net.w[2], Net.b[1], Net.b[2],
                       w1x_plus_b1, similar(z[1]), denoms[1], similar(z[2]), similar(z[2]),
-                      activation[1], Net.highLim[1])
+                      activation[1], highLim[1])
         # Forwards through layers
-        for k=2:Net.nLayers-1
+        for k=2:nLayers-1
             a = Net.w[k]*z[k-1] + Net.b[k]
             run_BCD_LPOM!(nInnerIterations, z[k], z[k+1],
                           Net.w[k], Net.w[k+1], Net.b[k], Net.b[k+1],
                           a, similar(z[k]), denoms[k], similar(z[k+1]), similar(z[k+1]),
-                          activation[k], Net.highLim[k])
+                          activation[k], highLim[k])
         end
     end
     return z
 end
 
-function compute_denoms(denoms, Net)
+function compute_denoms!(denoms, Net, nNeurons)
 
     for (layer, w) in enumerate(Net.w[2:end])
-        for i=1:Net.nNeurons[layer+1]
+        for i=1:nNeurons[layer+1]
             denoms[layer][i] = 1/(1 + BLAS.dot(view(w, :, i), view(w, :, i)))
         end
     end
-    # One-line alternative.
+    # Slightly slower one-line alternative.
     # denoms = [[1/(1+BLAS.dot(wcol, wcol)) for wcol in eachcol(w)] for w in Net.w[2:end]]
     return denoms
 end
 
-function get_∇!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
+function get_∇!(∇w, ∇b, ∇dummy, X, Z, batchsize, activation, Net, nLayers)
 
     # First layer
-    ∇bDummy[1] = (activation[1].(Net.w[1]*X .+ Net.b[1]) - Z[1])/batchsize
-    ∇w[1] = ∇bDummy[1]*X'
-    ∇b[1] = reshape(sum(∇bDummy[1], dims=2), size(∇b[1]))#/batchsize # reshaping to drop singleton dimension
+    ∇dummy[1] = (activation[1].(Net.w[1]*X .+ Net.b[1]) - Z[1])/batchsize
+    ∇w[1] = ∇dummy[1]*X'
+    ∇b[1] = reshape(sum(∇dummy[1], dims=2), size(∇b[1])) # reshaping to drop singleton dimension
     # Subsequent layers
-    for i=2:Net.nLayers
-        ∇bDummy[i] = (activation[i].(Net.w[i]*Z[i-1] .+ Net.b[i]) - Z[i])/batchsize
-        ∇w[i] = ∇bDummy[i]*Z[i-1]'
-        ∇b[i] = reshape(sum(∇bDummy[i], dims=2), size(∇b[i]))#/batchsize
+    for i=2:nLayers
+        ∇dummy[i] = (activation[i].(Net.w[i]*Z[i-1] .+ Net.b[i]) - Z[i])/batchsize
+        ∇w[i] = ∇dummy[i]*Z[i-1]'
+        ∇b[i] = reshape(sum(∇dummy[i], dims=2), size(∇b[i])) # reshaping to drop singleton dimension
     end
 end
 
-function get_loss(Net, W1X_plus_b1, X, Z, activation)
+function get_loss(Net, nLayers, W1X_plus_b1, X, Z, activation)
 
     b = W1X_plus_b1 - Z[1]
     J = 0.5*sum(abs2, b)
-    
     b = W1X_plus_b1 - activation[1].(W1X_plus_b1)
     J -= 0.5*sum(abs2, b)
-    
     # Subsequent layers
-    for i=2:Net.nLayers
+    for i=2:nLayers
         a = Net.w[i]*Z[i-1] .+ Net.b[i]
         b = a - Z[i]
         J += 0.5*sum(abs2, b)
@@ -116,89 +111,92 @@ function get_loss(Net, W1X_plus_b1, X, Z, activation)
     return J
 end
 
-function loss_and_accuracy(dataloader, batchsize, Net, activation)
+function get_accuracy(dataloader, batchsize, Net, nNeurons, activation)
+
     acc = 0.0
-    J = 0.0
     nsamples = dataloader.nobs
-    Z = [zeros(Float32, N, batchsize) for N in Net.nNeurons[2:end]]
+    Z = [zeros(Float32, N, batchsize) for N in nNeurons[2:end]]
     for (X, Y) in dataloader
         W1X_plus_b1 = Net.w[1]*X.+Net.b[1]
         forward!(Z, Net, activation, W1X_plus_b1)
         acc += sum(argmax.(eachcol(Z[end])).==argmax.(eachcol(Y)))
-        J += get_loss(Net, W1X_plus_b1, X, Z, activation)
     end
-    return (100*acc/nsamples, J/nsamples)
+
+    return 100*acc/nsamples
 end
 
 """Train an MLP using local contrastive Hebbian learning."""
-function train_LPOM_threads(Net, batchsize, test_batchsize, nEpochs, η, nOuterIterations, nInnerIterations, activation, outpath, numThreads)
+function train_LPOM_threads(Net, args)
 
-    LinearAlgebra.BLAS.set_num_threads(numThreads)
+    LinearAlgebra.BLAS.set_num_threads(args.numThreads)
+    nNeurons = args.nNeurons
+    nLayers = args.nLayers
 
-    Z = [zeros(Float32, N, batchsize) for N in Net.nNeurons[2:end]]
-    W1X_plus_b1w = [zeros(Float32, (Net.nNeurons[n+1], Net.nNeurons[n])) for n = 1:Net.nLayers]
-    ∇w = [zeros(Float32, (Net.nNeurons[n+1], Net.nNeurons[n])) for n = 1:Net.nLayers]
-	  ∇b = [zeros(Float32, (Net.nNeurons[n+1])) for n = 1:Net.nLayers]
-    ∇bDummy = [zeros(Float32, (Net.nNeurons[n+1], batchsize)) for n = 1:Net.nLayers]
-    denoms = [zeros(Float32, N) for N in Net.nNeurons[2:end-1]]
+    Z = [zeros(Float32, N, args.batchsize) for N in nNeurons[2:end]]
+    ∇w = [zeros(Float32, (nNeurons[n+1], nNeurons[n])) for n = 1:nLayers]
+	  ∇b = [zeros(Float32, (nNeurons[n+1])) for n = 1:nLayers]
+    ∇dummy = [zeros(Float32, (nNeurons[n+1], args.batchsize)) for n = 1:nLayers]
+    denoms = [zeros(Float32, N) for N in nNeurons[2:end-1]]
 
-    trainloader, testloader = get_data(batchsize, test_batchsize)
-    nSamples = trainloader.nobs
+    trainloader, testloader = get_data(args.batchsize, args.test_batchsize)
+    nSamples = trainloader.imax
 
 	  #Loop across epochs
-	  for epoch = 1:nEpochs
-		    t=0
+	  for epoch = 1:args.nEpochs
 		    t0 = time()
 
-		    # And a variable for counting batch number
-		    correct::Int32 = 0
-		    J::Float32 = 0
+		    correct = 0
+		    J_train = 0.0
+        acc_train = 0.0
+        acc_test = 0.0
 
 		    # Loop through mini batches
         for (X, Y) in trainloader
             # Precompute
-            W1X_plus_b1 = Net.w[1]*X.+Net.b[1]
-            denoms = compute_denoms(denoms, Net)
+            W1X_plus_b1 = Net.w[1]*X .+ Net.b[1]
+            compute_denoms!(denoms, Net, nNeurons)
 
             # Make FF predictions and clamp output units
-            forward!(Z, Net, activation, W1X_plus_b1)
+            forward!(Z, Net, args.activation, W1X_plus_b1)
             correct += sum(argmax.(eachcol(Z[end])).==argmax.(eachcol(Y)))
             Z[end] .= Y
 
             #= Process individual datapoints: Note that BLAS should be single threaded
             in the threaded loop in order to not obstruct the benefits of dataparallelism=#
             LinearAlgebra.BLAS.set_num_threads(1)
-            Threads.@threads for n = 1:size(Y)[2] # Size of last batch might differ so we use size(Y)[2]
-                zz = [view(Zi, :, n) for Zi in Z]
-                run_LPOM_inference!(view(X,:,n), view(W1X_plus_b1, :, n), zz, denoms,
-                                    Net, nOuterIterations, nInnerIterations, activation)
+            # Size of final batch might be less than batchsize so we use size(Y)[2]
+            Threads.@threads for n = 1:size(Y)[2] 
+                # use view to reference the columns of Z. Each column corresponds to a datapoint
+                z = [view(zi, :, n) for zi in Z]
+                run_LPOM_inference!(X[:, n], W1X_plus_b1[:, n], z, denoms,
+                                    Net, args.nOuterIterations, args.nInnerIterations,
+                                    args.activation, args.highLim, nLayers)
 			      end
             # Now BLAS should be multithreaded again
-            LinearAlgebra.BLAS.set_num_threads(numThreads) 
+            LinearAlgebra.BLAS.set_num_threads(args.numThreads) 
 
             # update number of correct predictions and the loss
-            J += get_loss(Net, W1X_plus_b1, X, Z, activation)
+            J_train += get_loss(Net, nLayers, W1X_plus_b1, X, Z, args.activation)
 
             # Compute the gradient and update the weights
-            get_∇!(∇w, ∇b, ∇bDummy, X, Z, batchsize, activation, Net)
-			      Net.w -= η * ∇w
-			      Net.b -= η * ∇b
+            get_∇!(∇w, ∇b, ∇dummy, X, Z,  args.batchsize, args.activation, Net, nLayers)
+			      Net.w -= args.η * ∇w
+			      Net.b -= args.η * ∇b
 
 		    end
 
 		    acc_train = 100*correct/nSamples
-		    Av_J = J/nSamples
+		    J_train = J_train/nSamples
 
-        acc_test, J_test = loss_and_accuracy(testloader, test_batchsize, Net, activation)
+        acc_test = get_accuracy(testloader, args.test_batchsize, Net, nNeurons, args.activation)
 		    push!(Net.History["acc_train"], acc_train)
 		    push!(Net.History["acc_test"], acc_test)
-		    push!(Net.History["J"], Av_J)
+		    push!(Net.History["J_train"], J_train)
 
 		    t1 = time()
-		    println("\nav. metrics: \tJ: $(@sprintf("%.8f", Av_J))\tacc_train: $(@sprintf("%.2f", acc_train))%\tacc_test: $(@sprintf("%.2f", acc_test))% \tProc. time: $(@sprintf("%.2f", t1-t0))\n")
-
+		    println("\nJ_train: $(@sprintf("%.8f", J_train))\tacc_train: $(@sprintf("%.2f", acc_train))%\tacc_test: $(@sprintf("%.2f", acc_test))% \tProc. time: $(@sprintf("%.2f", t1-t0))\n")
 		    push!(Net.History["runTimes"], t1-t0)
-		    FileIO.save("$outpath", "Net", Net)
+		    FileIO.save("$(args.outpath)", "Net", Net)
 	  end
     return
 end
@@ -217,8 +215,8 @@ function get_data(batchsize, test_batchsize)
     ytrain, ytest = onehotbatch(ytrain, 0:9), onehotbatch(ytest, 0:9)
 
     # Create DataLoaders (mini-batch iterators)
-    train_loader = DataLoader((xtrain, ytrain), batchsize=batchsize, shuffle=true)
-    test_loader = DataLoader((xtest, ytest), batchsize=test_batchsize)
+    train_loader = DataLoader((xtrain, ytrain), batchsize=batchsize, shuffle=true, partial=false)
+    test_loader = DataLoader((xtest, ytest), batchsize=test_batchsize, partial=false)
 
     return train_loader, test_loader
 end
