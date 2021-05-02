@@ -36,6 +36,7 @@ function run_BCD_LPOM!(nInnerIterations, z, y,
     end
 end
 
+"""Infer neuron activations across all hidden layers (Through repeated calls to run_BCD_LPOM!)."""
 function run_LPOM_inference!(x, w1x_plus_b1, z, denoms, Net,
                              nOuterIterations, nInnerIterations, activation, highLim, nLayers)
 
@@ -68,6 +69,7 @@ function run_LPOM_inference!(x, w1x_plus_b1, z, denoms, Net,
     return z
 end
 
+"""Compute the denominator used by run_LPOM_inference."""
 function compute_denoms!(denoms, Net, nNeurons)
 
     for (layer, w) in enumerate(Net.w[2:end])
@@ -80,20 +82,21 @@ function compute_denoms!(denoms, Net, nNeurons)
     return denoms
 end
 
-function get_∇!(∇w, ∇b, ∇dummy, X, Z, batchsize, activation, Net, nLayers)
+"""Compute the gradient of a batch of datapoints."""
+function get_gradient!(∇θ, θ, X, Z, batchsize, activation, Net, nLayers)
 
-    # First layer
-    ∇dummy[1] = (activation[1].(Net.w[1]*X .+ Net.b[1]) - Z[1])/batchsize
-    ∇w[1] = ∇dummy[1]*X'
-    ∇b[1] = reshape(sum(∇dummy[1], dims=2), size(∇b[1])) # reshaping to drop singleton dimension
+    ∇dummy = (activation[1].(Net.w[1]*X .+ Net.b[1]) - Z[1])/batchsize
+    ∇θ.grads[θ[1]] = ∇dummy*X'
+    ∇θ.grads[θ[nLayers+1]] = reshape(sum(∇dummy, dims=2), length(Net.b[1])) # reshaping to drop singleton dimension
     # Subsequent layers
     for i=2:nLayers
-        ∇dummy[i] = (activation[i].(Net.w[i]*Z[i-1] .+ Net.b[i]) - Z[i])/batchsize
-        ∇w[i] = ∇dummy[i]*Z[i-1]'
-        ∇b[i] = reshape(sum(∇dummy[i], dims=2), size(∇b[i])) # reshaping to drop singleton dimension
+        ∇dummy = (activation[i].(Net.w[i]*Z[i-1] .+ Net.b[i]) - Z[i])/batchsize
+        ∇θ.grads[θ[i]] = ∇dummy*Z[i-1]'
+        ∇θ.grads[θ[nLayers+i]] = reshape(sum(∇dummy, dims=2), length(Net.b[i])) # reshaping to drop singleton dimension
     end
 end
 
+"""Compute the contrastive loss of a batch of datapoints."""
 function get_loss(Net, nLayers, W1X_plus_b1, X, Z, activation)
 
     b = W1X_plus_b1 - Z[1]
@@ -111,8 +114,8 @@ function get_loss(Net, nLayers, W1X_plus_b1, X, Z, activation)
     return J
 end
 
+"""Compute the accuracy on a dataset."""
 function get_accuracy(dataloader, batchsize, Net, nNeurons, activation)
-
     acc = 0.0
     nsamples = dataloader.nobs
     Z = [zeros(Float32, N, batchsize) for N in nNeurons[2:end]]
@@ -126,29 +129,29 @@ function get_accuracy(dataloader, batchsize, Net, nNeurons, activation)
 end
 
 """Train an MLP using local contrastive Hebbian learning."""
-function train_LPOM_threads(Net, args)
+function train(Net, args, optimizer)
 
     LinearAlgebra.BLAS.set_num_threads(args.numThreads)
     nNeurons = args.nNeurons
     nLayers = args.nLayers
 
     Z = [zeros(Float32, N, args.batchsize) for N in nNeurons[2:end]]
-    ∇w = [zeros(Float32, (nNeurons[n+1], nNeurons[n])) for n = 1:nLayers]
-	  ∇b = [zeros(Float32, (nNeurons[n+1])) for n = 1:nLayers]
-    ∇dummy = [zeros(Float32, (nNeurons[n+1], args.batchsize)) for n = 1:nLayers]
     denoms = [zeros(Float32, N) for N in nNeurons[2:end-1]]
 
     trainloader, testloader = get_data(args.batchsize, args.test_batchsize)
     nSamples = trainloader.imax
+
+
+    # trainable parameters and gradients
+    θ = Flux.params(Net.w, Net.b)
+    ∇θ = Zygote.Grads(IdDict(), θ)
 
 	  #Loop across epochs
 	  for epoch = 1:args.nEpochs
 		    t0 = time()
 
 		    correct = 0
-		    J_train = 0.0
-        acc_train = 0.0
-        acc_test = 0.0
+		    J_train = 0
 
 		    # Loop through mini batches
         for (X, Y) in trainloader
@@ -161,29 +164,26 @@ function train_LPOM_threads(Net, args)
             correct += sum(argmax.(eachcol(Z[end])).==argmax.(eachcol(Y)))
             Z[end] .= Y
 
-            #= Process individual datapoints: Note that BLAS should be single threaded
-            in the threaded loop in order to not obstruct the benefits of dataparallelism=#
+            #= Process individual datapoints:
+            Note1: that BLAS should be single threaded in the threaded loop
+            in order to not obstruct the benefits of dataparallelism.
+            Note2: The size of final batch might be less than batchsize so we
+            loop our the  columns of Y=#
             LinearAlgebra.BLAS.set_num_threads(1)
-            # Size of final batch might be less than batchsize so we use size(Y)[2]
-            Threads.@threads for n = 1:size(Y)[2] 
-                # use view to reference the columns of Z. Each column corresponds to a datapoint
+            Threads.@threads for n = 1:size(Y)[2]
                 z = [view(zi, :, n) for zi in Z]
                 run_LPOM_inference!(X[:, n], W1X_plus_b1[:, n], z, denoms,
                                     Net, args.nOuterIterations, args.nInnerIterations,
                                     args.activation, args.highLim, nLayers)
 			      end
-            # Now BLAS should be multithreaded again
-            LinearAlgebra.BLAS.set_num_threads(args.numThreads) 
+            LinearAlgebra.BLAS.set_num_threads(args.numThreads)
 
-            # update number of correct predictions and the loss
+            # Compute the loss, the gradient and update the weights
             J_train += get_loss(Net, nLayers, W1X_plus_b1, X, Z, args.activation)
+            get_gradient!(∇θ, θ, X, Z,  args.batchsize, args.activation, Net, nLayers)
+            Flux.Optimise.update!(optimizer, θ, ∇θ)
 
-            # Compute the gradient and update the weights
-            get_∇!(∇w, ∇b, ∇dummy, X, Z,  args.batchsize, args.activation, Net, nLayers)
-			      Net.w -= args.η * ∇w
-			      Net.b -= args.η * ∇b
-
-		    end
+		    end # End loop across batches
 
 		    acc_train = 100*correct/nSamples
 		    J_train = J_train/nSamples
@@ -192,12 +192,11 @@ function train_LPOM_threads(Net, args)
 		    push!(Net.History["acc_train"], acc_train)
 		    push!(Net.History["acc_test"], acc_test)
 		    push!(Net.History["J_train"], J_train)
-
 		    t1 = time()
-		    println("\nJ_train: $(@sprintf("%.8f", J_train))\tacc_train: $(@sprintf("%.2f", acc_train))%\tacc_test: $(@sprintf("%.2f", acc_test))% \tProc. time: $(@sprintf("%.2f", t1-t0))\n")
+		    println("\nepoch: $epoch\t J_train: $(@sprintf("%.8f", J_train))\tacc_train: $(@sprintf("%.2f", acc_train))%\tacc_test: $(@sprintf("%.2f", acc_test))% \tProc. time: $(@sprintf("%.2f", t1-t0))\n")
 		    push!(Net.History["runTimes"], t1-t0)
 		    FileIO.save("$(args.outpath)", "Net", Net)
-	  end
+	  end # End loop across epochs
     return
 end
 
