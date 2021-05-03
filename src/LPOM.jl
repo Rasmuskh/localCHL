@@ -7,7 +7,7 @@ function run_BCD_LPOM!(nInnerIterations, z, y,
                        activation, high)
 
     c .= y .- b1 
-    b .= W1'*(c)
+    b .= W1'*c
 
     # Update all neurons in layer nPasses times
     for pass=1:nInnerIterations
@@ -18,19 +18,19 @@ function run_BCD_LPOM!(nInnerIterations, z, y,
             z_old = z[i]
             w1 = view(W1, :, i)
 
+            # Deal with crosstalk terms. 
             u = 0.0
-            v = 0.0
-            for j=1:length(y)
+            v = 0.0 
+            @avx for j ∈ eachindex(c)
                 cc = c[j] + b1[j]
-                if cc<0.0
-                    u -= w1[j]*cc
-                elseif (cc-high)>0.0
-                    v -= (w1[j]*(cc - high))
-                end
+                checklow = cc<0.0
+                u -= checklow*w1[j]*cc
+                checkhigh = (cc-high)>0.0
+                v -= checkhigh*(w1[j]*(cc - high))
+                c[j] -= w1[j]*z_old
             end
 
-            c .-= w1.*z_old
-            z[i] = activation((a[i] + b[i] - BLAS.dot(c, w1) - u - v)*denoms[i])
+            z[i] = activation((a[i] + b[i] - dotavx(c, w1) - u - v)*denoms[i])
             c .+= w1.*z[i]
         end
     end
@@ -39,7 +39,6 @@ end
 """Infer neuron activations across all hidden layers (Through repeated calls to run_BCD_LPOM!)."""
 function run_LPOM_inference!(x, w1x_plus_b1, z, denoms, Net,
                              nOuterIterations, nInnerIterations, activation, highLim, nLayers)
-
     for i=1:nOuterIterations
         #= Iterate backwards through the layers. On the first iteration i=1 we start infering
         at layer nLayers-1. On subsequent iterations i>1 we start at nLayers-2 since the last
@@ -74,11 +73,11 @@ function compute_denoms!(denoms, Net, nNeurons)
 
     for (layer, w) in enumerate(Net.w[2:end])
         for i=1:nNeurons[layer+1]
-            denoms[layer][i] = 1/(1 + BLAS.dot(view(w, :, i), view(w, :, i)))
+            denoms[layer][i] = 1/(1 + selfdotavx(view(w, :, i)))
         end
     end
     # Slightly slower one-line alternative.
-    # denoms = [[1/(1+BLAS.dot(wcol, wcol)) for wcol in eachcol(w)] for w in Net.w[2:end]]
+    # denoms = [[1/(1+selfdotavx(wcol)) for wcol in eachcol(w)] for w in Net.w[2:end]]
     return denoms
 end
 
@@ -115,13 +114,13 @@ function get_loss(Net, nLayers, W1X_plus_b1, X, Z, activation)
 end
 
 """Compute the accuracy on a dataset."""
-function get_accuracy(dataloader, batchsize, Net, nNeurons, activation)
+function get_accuracy(dataloader, batchsize, Net, nNeurons, nLayers, activation)
     acc = 0.0
     nsamples = dataloader.nobs
     Z = [zeros(Float32, N, batchsize) for N in nNeurons[2:end]]
     for (X, Y) in dataloader
         W1X_plus_b1 = Net.w[1]*X.+Net.b[1]
-        forward!(Z, Net, activation, W1X_plus_b1)
+        forward!(Z, Net, activation, W1X_plus_b1, nLayers)
         acc += sum(argmax.(eachcol(Z[end])).==argmax.(eachcol(Y)))
     end
 
@@ -160,7 +159,7 @@ function train(Net, args, optimizer)
             compute_denoms!(denoms, Net, nNeurons)
 
             # Make FF predictions and clamp output units
-            forward!(Z, Net, args.activation, W1X_plus_b1)
+            forward!(Z, Net, args.activation, W1X_plus_b1, nLayers)
             correct += sum(argmax.(eachcol(Z[end])).==argmax.(eachcol(Y)))
             Z[end] .= Y
 
@@ -188,7 +187,7 @@ function train(Net, args, optimizer)
 		    acc_train = 100*correct/nSamples
 		    J_train = J_train/nSamples
 
-        acc_test = get_accuracy(testloader, args.test_batchsize, Net, nNeurons, args.activation)
+        acc_test = get_accuracy(testloader, args.test_batchsize, Net, nNeurons, nLayers, args.activation)
 		    push!(Net.History["acc_train"], acc_train)
 		    push!(Net.History["acc_test"], acc_test)
 		    push!(Net.History["J_train"], J_train)
