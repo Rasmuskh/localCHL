@@ -1,3 +1,4 @@
+# Don't git output files
 *.jld2
 *.png
 *.jpg
