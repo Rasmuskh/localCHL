@@ -1,3 +1,4 @@
+"""Struct for holding various arguments for the train function"""
 @kwdef struct Args
     # Network specific parameters
     nNeurons::Array{Int32, 1}
@@ -18,23 +19,21 @@
 
 end
 
+"""Network struct"""
 mutable struct Net_CHL
-    nNeurons::Array{Int32, 1}
-	  nLayers::Int32
 	  w::Array{Array{Float32, 2},1}
 	  b::Array{Array{Float32, 1},1}
     highLim::Array{Float32,1}
-	  num_updates::Int32
 	  History::Dict{String, Array{Float32,1}}
 end
 
+"""Initialize network weights and allocate arrays for training metric history."""
 function init_network(nNeurons, highLim, init_mode="glorot_normal")
-	  """Initialize network weights and allocate arrays for training metric history."""
 	  nLayers = length(nNeurons) - 1
     if init_mode == "glorot_normal"
-        w = [1/sqrt(nNeurons[i] + nNeurons[i+1]) * randn(rng, Float32, (nNeurons[i+1], nNeurons[i])) for i = 1:nLayers]
+        w = [1/sqrt(nNeurons[i] + nNeurons[i+1]) * randn(Float32, (nNeurons[i+1], nNeurons[i])) for i = 1:nLayers]
     elseif init_mode == "glorot_uniform"
-        w = [(rand(rng, Float32, (nNeurons[i+1], nNeurons[i])) .- 0.5) * sqrt(6.0/(nNeurons[i] + nNeurons[i+1])) for i = 1:nLayers]
+        w = [(rand(Float32, (nNeurons[i+1], nNeurons[i])) .- 0.5) * sqrt(6.0/(nNeurons[i] + nNeurons[i+1])) for i = 1:nLayers]
     end
 
 	  b = [zeros(Float32, (nNeurons[i+1])) for i = 1:nLayers]
@@ -49,11 +48,13 @@ function init_network(nNeurons, highLim, init_mode="glorot_normal")
     )
 
 	  # Network struct
-	  Net = Net_CHL(nNeurons, nLayers, w, b, highLim, num_updates, History)
+	  Net = Net_CHL(w, b, highLim, History)
 	  println("Network initialized")
 	  return Net
 end
 
+"""Convert an LPOM/local-CHL model to a Flux Chain model.
+TODO (perhaps): refactor code to use Flux Chain model for LPOM."""
 function LPOM_to_Flux(Net, activation)
     D = []
     for i in 1:Net.nLayers
@@ -77,14 +78,29 @@ end
 HS(z) = Clamp(z, 0, 1.0)
 
 """Feed-forward pass"""
-function forward!(z, Net, activation, w1x_plus_b1)
+function forward!(z, Net, activation, w1x_plus_b1, nLayers)
     z[1] = activation[1].(w1x_plus_b1)
-
-    for i = 2:Net.nLayers-1
+    for i = 2:nLayers
         z[i] =  activation[i].(Net.w[i] * z[i-1] .+ Net.b[i])
     end
-
-    L = Net.nLayers
-    z[L] = activation[L].(Net.w[L] * z[L-1] .+ Net.b[L])
 end
 
+"""Fast dot product utilizing avx. Source LoopVectorization.jl:
+https://juliasimd.github.io/LoopVectorization.jl/latest/examples/dot_product/"""
+function dotavx(a, b)
+    s = zero(eltype(a))
+    @avx for i ∈ eachindex(a, b)
+        s += a[i] * b[i]
+    end
+    s
+end
+
+"""Fast squared sum of vector elements (self-dot product) utilizing avx. Source LoopVectorization.jl:
+https://juliasimd.github.io/LoopVectorization.jl/latest/examples/dot_product/"""
+function selfdotavx(a)
+    s = zero(eltype(a))
+    @avx for i ∈ eachindex(a)
+        s += a[i] * a[i]
+    end
+    s
+end
