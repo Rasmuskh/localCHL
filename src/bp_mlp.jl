@@ -7,6 +7,7 @@ using Base: @kwdef
 using CUDA
 using MLDatasets
 using Random; Random.seed!(32); rng = MersenneTwister(13)
+
 #=
 This file is based on the Flux model zoo's MNIST MLP example:
 https://github.com/FluxML/model-zoo/tree/master/vision/mlp_mnist
@@ -35,12 +36,12 @@ function getdata(batchsize, device)
     return train_loader, test_loader
 end
 
-# function build_model(; imgsize=(28,28,1), nclasses=10)
-#     return Chain(
-#  	      Dense(prod(imgsize), 64, HS),
-#         Dense(64, 64, HS),
-#         Dense(64, nclasses, HS))
-# end
+function build_model(; imgsize=(28,28,1), nclasses=10)
+    return Chain(
+ 	      Dense(prod(imgsize), 512, relu),
+        Dense(512, 512, relu),
+        Dense(512, nclasses, identity))
+end
 
 function loss_and_accuracy(data_loader, Net, device)
     acc = 0
@@ -100,15 +101,6 @@ function train_flux(Net, η, batchsize, nEpochs, use_cuda)
     return Net
 end
 
-
-
-### Run training
-# nNeurons = [784, 64, 64, 10]
-# highLim = [Inf, Inf, Inf, Inf]
-# activation = [relu, relu, relu]
-# init_mode =  "glorot_uniform"
-# Net0 = init_network(nNeurons, highLim, init_mode)
-# NetFlux = LPOM_to_Flux(Net0, activation)
-# NetFlux = train_flux(NetFlux, 0.1, 64, 3, false)
-
-# train(η=0.01) # can change hyperparameters
+# Run training
+Net = build_model()
+Net = train_flux(Net, 0.1, 64, 5, false)

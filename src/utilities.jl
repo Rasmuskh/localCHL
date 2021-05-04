@@ -55,9 +55,9 @@ end
 
 """Convert an LPOM/local-CHL model to a Flux Chain model.
 TODO (perhaps): refactor code to use Flux Chain model for LPOM."""
-function LPOM_to_Flux(Net, activation)
+function LPOM_to_Flux(Net, activation, nLayers)
     D = []
-    for i in 1:Net.nLayers
+    for i in 1:nLayers
         w = Net.w[i]
         b = Net.b[i]
         Dummy = Dense(w, b, activation[i])#, initb=Net.b[i])

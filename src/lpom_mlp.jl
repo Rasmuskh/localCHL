@@ -22,9 +22,9 @@ include("utilities.jl")
 function main()
 
     # Initialize network
-    nNeurons = [784, 128, 128, 128, 10]
-    activation = [relu, relu, relu, identity]
-    highLim = [Inf, Inf, Inf, Inf] # Upper clamping limit: ReLU: Inf, HardSigmoid: 1
+    nNeurons = [784, 512, 512, 10]
+    activation = [relu, relu, identity] # Only supports relu and HS (Hard sigmoid)
+    highLim = [Inf, Inf, Inf] # Upper clamping limit: ReLU: Inf, HS: 1
     init_mode =  "glorot_uniform" # Options are: "glorot_uniform" and "glorot_normal" 
     Net = init_network(nNeurons, highLim, init_mode)
 
@@ -39,12 +39,10 @@ function main()
     # Optimizer options can be found at: https://fluxml.ai/Flux.jl/stable/training/optimisers/
     optimizer = Descent(0.2)
     # optimizer = ADAM(0.0003)
-    @time train(Net, args, optimizer)
+    train(Net, args, optimizer)
 
 return Net
 end
 
 Net = main();
 println("Training finished")
-
-
